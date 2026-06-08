@@ -34,24 +34,35 @@
 % ── Bibliografia autocontenida ──────────────────────────────
 \begin{filecontents}[overwrite]{referencias.bib}
 @article{Heakl2025SVRP,
-  author  = {Heakl, Ahmed and Shaaban, Yahia Salaheldin and Tak{\'a}c, Martin and Lahlou, Salem and Iklassov, Zangir},
+  author  = {Heakl, Ahmed and Shaaban, Yahia Salaheldin and Tak{\'a}{\v c}, Martin and Lahlou, Salem and Iklassov, Zangir},
   title   = {{SVRPBench}: A Realistic Benchmark for Stochastic Vehicle Routing Problem},
   journal = {arXiv preprint arXiv:2505.21887},
   year    = {2025}
 }
-@article{Bengio2021Architectures,
-  author  = {Bengio, Yoshua and Deleu, Tristan and Hu, Edward J. and Kipf, Thomas and Lahlou, Salem and Jastrzebski, Stanislaw and Jain, Moksh and Precup, Doina},
-  title   = {Flow Network Architectures for Generative Flow Networks},
-  journal = {arXiv preprint arXiv:2111.09266},
-  year    = {2021}
+@article{Lenstra1981Complexity,
+  author  = {Lenstra, Jan Karel and Rinnooy Kan, Alexander H. G.},
+  title   = {Complexity of vehicle routing and scheduling problems},
+  journal = {Networks},
+  volume  = {11},
+  number  = {2},
+  pages   = {221--227},
+  year    = {1981}
+}
+@article{Dorigo1996AntSystem,
+  author  = {Dorigo, Marco and Maniezzo, Vittorio and Colorni, Alberto},
+  title   = {Ant System: Optimization by a Colony of Cooperating Agents},
+  journal = {IEEE Transactions on Systems, Man, and Cybernetics, Part B (Cybernetics)},
+  volume  = {26},
+  number  = {1},
+  pages   = {29--41},
+  year    = {1996}
 }
 @article{Bengio2023Foundations,
   author  = {Bengio, Yoshua and Lahlou, Salem and Deleu, Tristan and Hu, Edward J. and Tiwari, Mo and Bengio, Emmanuel},
-  title   = {GFlowNet Foundations},
+  title   = {{GFlowNet} Foundations},
   journal = {Journal of Machine Learning Research},
   volume  = {24},
-  number  = {1},
-  pages   = {1--34},
+  pages   = {1--76},
   year    = {2023}
 }
 @inproceedings{Malkin2022Trajectory,
@@ -63,13 +74,13 @@
   year      = {2022}
 }
 @inproceedings{Zhang2025Hybrid,
-  author    = {Zhang, Ni and Lee, Seunggeun and Cao, Zhiguang and Park, Jinkyoo and Lahlou, Salem},
+  author    = {Zhang, Ni and Cao, Zhiguang},
   title     = {Hybrid-Balance {GFlowNet} for Solving Vehicle Routing Problems},
   booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
   year      = {2025}
 }
 @inproceedings{Kim2024GFACS,
-  author    = {Kim, Minsu and Park, Jinkyoo and Lahlou, Salem and Bengio, Yoshua},
+  author    = {Kim, Minsu and Choi, Sanghyeok and Kim, Hyeonah and Son, Jiwoo and Park, Jinkyoo and Bengio, Yoshua},
   title     = {Ant Colony Sampling with {GFlowNets} for Combinatorial Optimization},
   booktitle = {International Conference on Artificial Intelligence and Statistics (AISTATS)},
   year      = {2025}
@@ -85,7 +96,7 @@
 @inproceedings{Berto2023RL4CO,
   author    = {Berto, Federico and Hua, Chuanbo and Park, Junyoung and Kim, Minsu and Kim, Hyeonah and Son, Jiwoo and Kim, Haeyeon and Kim, Joungho and Park, Jinkyoo},
   title     = {{RL4CO}: an Extensive Reinforcement Learning for Combinatorial Optimization Benchmark},
-  booktitle = {Proceedings of the ACM SIGKDD International Conference on Knowledge Discovery \& Data Mining (KDD)},
+  booktitle = {Proceedings of the 31st ACM SIGKDD Conference on Knowledge Discovery and Data Mining (KDD '25)},
   year      = {2025}
 }
 @inproceedings{Akiba2019Optuna,
@@ -96,7 +107,7 @@
   year      = {2019}
 }
 @article{ENN_GFN_2025,
-  author  = {Laajil, Aya and Shtanchaev, Abduragim and Muhammad, Sajan and Moulines, Eric and Lahlou, Salem},
+  author  = {Muhammad, Sajan and Lahlou, Salem},
   title   = {Improved Exploration in {GFlowNets} via Enhanced Epistemic Neural Networks},
   journal = {arXiv preprint arXiv:2506.16313},
   year    = {2025}
@@ -215,9 +226,9 @@
 
 El campo de la investigaci\'on de operaciones y la optimizaci\'on log\'istica ha estado hist\'oricamente dominado por el Problema de Enrutamiento de Veh\'iculos (VRP, por sus siglas en ingl\'es). Concebido formalmente en la d\'ecada de 1950, el VRP representa uno de los desaf\'ios matem\'aticos m\'as estudiados en la ciencia de la computaci\'on debido a su profunda aplicabilidad industrial en cadenas de suministro, gesti\'on de flotas, log\'istica de \'ultima milla y redes de transporte. El objetivo fundamental del VRP es dise\~nar un conjunto de rutas \'optimas para una flota de veh\'iculos que deben atender a una serie de clientes distribuidos geogr\'aficamente, minimizando el costo total operativo sujeto a restricciones estrictas como la capacidad m\'axima de carga de los veh\'iculos, ventanas de tiempo de servicio obligatorias y tiempos m\'aximos de jornada laboral \cite{Heakl2025SVRP}.
 
-Desde la perspectiva de la complejidad computacional, el VRP y sus m\'ultiples variantes pertenecen a la clase de problemas NP-duros \cite{Bengio2021Architectures, Bengio2023Foundations}. Esto implica que el tiempo requerido para encontrar una soluci\'on globalmente \'optima escala de manera exponencial conforme aumenta el n\'umero de clientes o nodos en el grafo. Hist\'oricamente, la comunidad cient\'ifica abord\'o este problema a trav\'es de tres grandes paradigmas. El primer paradigma incluye los m\'etodos exactos, fundamentados en algoritmos de ramificaci\'on y acotaci\'on (\textit{branch-and-bound}), planos de corte (\textit{branch-and-cut}) y programaci\'on din\'amica. Si bien estos enfoques garantizan matem\'aticamente la identificaci\'on del \'optimo global, su aplicabilidad se restringe severamente a instancias de tama\~no reducido debido a la intratabilidad computacional, volvi\'endolos inoperantes en escenarios de log\'istica urbana masiva donde el n\'umero de nodos supera los varios cientos o miles de clientes.
+Desde la perspectiva de la complejidad computacional, el VRP y sus m\'ultiples variantes pertenecen a la clase de problemas NP-duros \cite{Lenstra1981Complexity}. Esto implica que el tiempo requerido para encontrar una soluci\'on globalmente \'optima escala de manera exponencial conforme aumenta el n\'umero de clientes o nodos en el grafo. Hist\'oricamente, la comunidad cient\'ifica abord\'o este problema a trav\'es de tres grandes paradigmas. El primer paradigma incluye los m\'etodos exactos, fundamentados en algoritmos de ramificaci\'on y acotaci\'on (\textit{branch-and-bound}), planos de corte (\textit{branch-and-cut}) y programaci\'on din\'amica. Si bien estos enfoques garantizan matem\'aticamente la identificaci\'on del \'optimo global, su aplicabilidad se restringe severamente a instancias de tama\~no reducido debido a la intratabilidad computacional, volvi\'endolos inoperantes en escenarios de log\'istica urbana masiva donde el n\'umero de nodos supera los varios cientos o miles de clientes.
 
-Para sortear las barreras de la intratabilidad matem\'atica, el segundo paradigma emergi\'o en la forma de algoritmos heur\'isticos y metaheur\'isticas. M\'etodos como el Recocido Simulado (\textit{Simulated Annealing}), la B\'usqueda Tab\'u (\textit{Tabu Search}), los Algoritmos Gen\'eticos y la Optimizaci\'on por Colonia de Hormigas (\textit{Ant Colony Optimization}, ACO) dominaron el estado del arte industrial durante d\'ecadas \cite{Kim2024GFACS}. Estas metaheur\'isticas sacrifican la garant\'ia de optimalidad global a cambio de encontrar soluciones sub\'optimas de muy alta calidad en tiempos de c\'omputo polinomiales. En particular, la Optimizaci\'on por Colonia de Hormigas se destac\'o por su capacidad para explorar vastos espacios de soluci\'on topol\'ogicos mediante el despliegue de m\'ultiples agentes concurrentes que construyen rutas de forma estoc\'astica, depositando rastros de feromona virtual que alteran las probabilidades de transici\'on en iteraciones futuras \cite{Kim2024GFACS}. Sin embargo, la limitaci\'on inherente de todas las metaheur\'isticas cl\'asicas radica en su dependencia extrema del dise\~no manual de reglas emp\'iricas, la calibraci\'on artesanal de hiperpar\'ametros espec\'ificos para cada distribuci\'on de datos, y una ejecuci\'on computacional desde cero para cada nueva instancia del problema. Cada vez que cambia el mapa de clientes, la metaheur\'istica debe reiniciar su proceso iterativo, lo que impide su uso eficiente en aplicaciones de enrutamiento din\'amico en tiempo real.
+Para sortear las barreras de la intratabilidad matem\'atica, el segundo paradigma emergi\'o en la forma de algoritmos heur\'isticos y metaheur\'isticas. M\'etodos como el Recocido Simulado (\textit{Simulated Annealing}), la B\'usqueda Tab\'u (\textit{Tabu Search}), los Algoritmos Gen\'eticos y la Optimizaci\'on por Colonia de Hormigas (\textit{Ant Colony Optimization}, ACO) dominaron el estado del arte industrial durante d\'ecadas \cite{Dorigo1996AntSystem}. Estas metaheur\'isticas sacrifican la garant\'ia de optimalidad global a cambio de encontrar soluciones sub\'optimas de muy alta calidad en tiempos de c\'omputo polinomiales. En particular, la Optimizaci\'on por Colonia de Hormigas se destac\'o por su capacidad para explorar vastos espacios de soluci\'on topol\'ogicos mediante el despliegue de m\'ultiples agentes concurrentes que construyen rutas de forma estoc\'astica, depositando rastros de feromona virtual que alteran las probabilidades de transici\'on en iteraciones futuras \cite{Dorigo1996AntSystem}. Sin embargo, la limitaci\'on inherente de todas las metaheur\'isticas cl\'asicas radica en su dependencia extrema del dise\~no manual de reglas emp\'iricas, la calibraci\'on artesanal de hiperpar\'ametros espec\'ificos para cada distribuci\'on de datos, y una ejecuci\'on computacional desde cero para cada nueva instancia del problema. Cada vez que cambia el mapa de clientes, la metaheur\'istica debe reiniciar su proceso iterativo, lo que impide su uso eficiente en aplicaciones de enrutamiento din\'amico en tiempo real.
 
 El tercer y m\'as reciente paradigma es la Optimizaci\'on Combinatoria Neuronal (NCO, por sus siglas en ingl\'es). Impulsada por los avances masivos en el aprendizaje profundo (\textit{Deep Learning}) y el procesamiento de secuencias, la NCO busca reemplazar el dise\~no de reglas heur\'isticas manuales con redes neuronales parametrizadas que aprenden a mapear directamente las caracter\'isticas geom\'etricas y espaciales de un problema hacia una soluci\'on \'optima \cite{Kwon2020POMO}. Los enfoques iniciales utilizaron Redes de Apuntadores (\textit{Pointer Networks}) y arquitecturas recurrentes entrenadas mediante aprendizaje supervisado. No obstante, el aprendizaje supervisado exig\'ia la generaci\'on previa de millones de rutas \'optimas mediante solucionadores exactos lentos para actuar como etiquetas de entrenamiento, un proceso que result\'o ser un cuello de botella inasumible para problemas a gran escala.
 
@@ -276,7 +287,7 @@ La evaluaci\'on rigurosa de las arquitecturas de NCO del estado del arte bajo el
 \addcontentsline{toc}{chapter}{El Surgimiento de las Redes de Flujo Generativo (GFlowNets)}
 % ────────────────────────────────────────────────────────────
 
-Frente a la vulnerabilidad estructural del Aprendizaje por Refuerzo est\'andar ante el SVRP, las Redes de Flujo Generativo (Generative Flow Networks o GFlowNets) emergen como un paradigma probabil\'istico fundamentado te\'oricamente para resolver problemas de diversidad en espacios combinatorios \cite{Bengio2021Architectures, Bengio2023Foundations}. Las GFlowNets abandonan el objetivo exclusivo de maximizaci\'on de recompensas. En cambio, su objetivo de optimizaci\'on es aprender una pol\'itica estoc\'astica secuencial que construya objetos composicionales discretos con una probabilidad de muestreo que sea estrictamente proporcional a una funci\'on de recompensa no normalizada.
+Frente a la vulnerabilidad estructural del Aprendizaje por Refuerzo est\'andar ante el SVRP, las Redes de Flujo Generativo (Generative Flow Networks o GFlowNets) emergen como un paradigma probabil\'istico fundamentado te\'oricamente para resolver problemas de diversidad en espacios combinatorios \cite{Bengio2023Foundations}. Las GFlowNets abandonan el objetivo exclusivo de maximizaci\'on de recompensas. En cambio, su objetivo de optimizaci\'on es aprender una pol\'itica estoc\'astica secuencial que construya objetos composicionales discretos con una probabilidad de muestreo que sea estrictamente proporcional a una funci\'on de recompensa no normalizada.
 
 La matem\'atica subyacente de las GFlowNets modela el espacio de soluci\'on como un Grafo Ac\'iclico Dirigido (DAG), $\mathcal{G} = (\mathcal{V}, \mathcal{E})$. El estado inicial $s_0$ representa una soluci\'on vac\'ia. Cada transici\'on dirigida representa una acci\'on constructiva v\'alida, llevando a un nuevo estado parcial. Los estados terminales, denominados $x \in \mathcal{X}$, representan soluciones completas y evaluables. Las GFlowNets entrenan una red neuronal para garantizar que la suma de los flujos que ingresan a un estado parcial sea igual a la suma de los flujos que salen del mismo hacia todos sus posibles hijos \cite{Bengio2023Foundations}. Cuando esta condici\'on de conservaci\'on de Markov se cumple, el modelo induce una pol\'itica de avance $P_F$ y una pol\'itica de retroceso $P_B$ que alinean $P_T(x) \propto R(x)$ de forma exacta.
 

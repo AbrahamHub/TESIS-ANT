@@ -15,7 +15,13 @@
       "Bash(cat)",
       "Bash(/tmp/pdfvenv/bin/python /tmp/extract.py)",
       "Bash(/tmp/pdfvenv/bin/python /tmp/extract2.py)",
-      "Bash(/tmp/pdfvenv/bin/python /tmp/extract3.py)"
+      "Bash(/tmp/pdfvenv/bin/python /tmp/extract3.py)",
+      "Bash(mv \"[3] GFlowNet Foundations.pdf\" \"[6] GFlowNet Foundations.pdf\")",
+      "Bash(mv \"[4] Ant Colony Sampling with GFlowNets for Combinatorial Optimization.pdf\" \"[10] Ant Colony Sampling with GFlowNets for Combinatorial Optimization.pdf\")",
+      "Bash(mv \"[5] POMO Policy Optimization with Multiple Optima for Reinforcement Learning.pdf\" \"[4] POMO Policy Optimization with Multiple Optima for Reinforcement Learning.pdf\")",
+      "Bash(mv \"[6] RL4CO An Extensive Reinforcement Learning for Combinatorial Optimization Benchmark.pdf\" \"[5] RL4CO An Extensive Reinforcement Learning for Combinatorial Optimization Benchmark.pdf\")",
+      "Bash(mv \"[10]  A Next-generation Hyperparameter Optimization Framework.pdf\" \"[11] Optuna A Next-generation Hyperparameter Optimization Framework.pdf\")",
+      "Bash(sort -t'[' -k2 -n)"
     ]
   }
 }
