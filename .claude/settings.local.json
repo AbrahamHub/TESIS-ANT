@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import pypdf; print\\('pypdf ok'\\)\")",
+      "Bash(python3 -c \"import PyPDF2; print\\('PyPDF2 ok'\\)\")",
+      "Bash(python3 -c \"import fitz; print\\('pymupdf ok'\\)\")",
+      "Bash(python3 -c \"import pdfplumber; print\\('pdfplumber ok'\\)\")",
+      "Bash(python3 -m pip install --quiet pypdf)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(python3 -c \"import pypdf; print\\('pypdf version', pypdf.__version__\\)\")",
+      "Bash(brew list *)",
+      "Bash(python3 -m venv /tmp/pdfvenv)",
+      "Bash(/tmp/pdfvenv/bin/pip install *)",
+      "Bash(/tmp/pdfvenv/bin/python -c \"import pypdf; print\\('pypdf ready in venv'\\)\")",
+      "Bash(cat)",
+      "Bash(/tmp/pdfvenv/bin/python /tmp/extract.py)",
+      "Bash(/tmp/pdfvenv/bin/python /tmp/extract2.py)",
+      "Bash(/tmp/pdfvenv/bin/python /tmp/extract3.py)"
+    ]
+  }
+}
