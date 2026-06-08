@@ -1,0 +1,471 @@
+% ============================================================
+%  ANTEPROYECTO DE TESIS — UANL / FIME
+%  Abraham Castaneda Quintero
+%  Propuesta: Muestreo Híbrido mediante Redes de Flujo Generativo 
+%  y Optimización por Colonia de Hormigas para el Problema 
+%  de Enrutamiento de Vehículos Estocástico (EHBG-FACS)
+% ============================================================
+
+\documentclass[12pt]{report}
+
+% ── Paquetes ────────────────────────────────────────────────
+\usepackage[spanish,es-noquoting,es-noshorthands]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage{fontenc}
+\usepackage{csquotes}           % requerido por biblatex con babel
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{tocloft}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{tikz}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{array}
+\usepackage{letterspace}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{colortbl}
+\usepackage[backend=biber,style=ieee,sorting=none]{biblatex}
+\usepackage{hyperref}
+
+% ── Bibliografia autocontenida ──────────────────────────────
+\begin{filecontents}[overwrite]{referencias.bib}
+@article{Heakl2025SVRP,
+  author  = {Heakl, Ahmed and Shaaban, Yahia Salaheldin and Tak{\'a}c, Martin and Lahlou, Salem and Iklassov, Zangir},
+  title   = {{SVRPBench}: A Realistic Benchmark for Stochastic Vehicle Routing Problem},
+  journal = {arXiv preprint arXiv:2505.21887},
+  year    = {2025}
+}
+@article{Bengio2021Architectures,
+  author  = {Bengio, Yoshua and Deleu, Tristan and Hu, Edward J. and Kipf, Thomas and Lahlou, Salem and Jastrzebski, Stanislaw and Jain, Moksh and Precup, Doina},
+  title   = {Flow Network Architectures for Generative Flow Networks},
+  journal = {arXiv preprint arXiv:2111.09266},
+  year    = {2021}
+}
+@article{Bengio2023Foundations,
+  author  = {Bengio, Yoshua and Lahlou, Salem and Deleu, Tristan and Hu, Edward J. and Tiwari, Mo and Bengio, Emmanuel},
+  title   = {GFlowNet Foundations},
+  journal = {Journal of Machine Learning Research},
+  volume  = {24},
+  number  = {1},
+  pages   = {1--34},
+  year    = {2023}
+}
+@inproceedings{Malkin2022Trajectory,
+  author    = {Malkin, Nikolay and Jain, Moksh and Bengio, Emmanuel and Sun, Chen and Bengio, Yoshua},
+  title     = {Trajectory balance: Improved credit assignment in gflownets},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {35},
+  pages     = {5955--5967},
+  year      = {2022}
+}
+@inproceedings{Zhang2025Hybrid,
+  author    = {Zhang, Ni and Lee, Seunggeun and Cao, Zhiguang and Park, Jinkyoo and Lahlou, Salem},
+  title     = {Hybrid-Balance {GFlowNet} for Solving Vehicle Routing Problems},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2025}
+}
+@inproceedings{Kim2024GFACS,
+  author    = {Kim, Minsu and Park, Jinkyoo and Lahlou, Salem and Bengio, Yoshua},
+  title     = {Ant Colony Sampling with {GFlowNets} for Combinatorial Optimization},
+  booktitle = {International Conference on Artificial Intelligence and Statistics (AISTATS)},
+  year      = {2025}
+}
+@inproceedings{Kwon2020POMO,
+  author    = {Kwon, Yeong-Dae and Choo, Jinho and Kim, Byoungjip and Yoon, Iljoo and Gwon, Youngjune and Min, Seungjai},
+  title     = {{POMO}: Policy Optimization with Multiple Optima for Reinforcement Learning},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {33},
+  pages     = {21188--21198},
+  year      = {2020}
+}
+@inproceedings{Berto2023RL4CO,
+  author    = {Berto, Federico and Hua, Chuanbo and Park, Junyoung and Kim, Minsu and Kim, Hyeonah and Son, Jiwoo and Kim, Haeyeon and Kim, Joungho and Park, Jinkyoo},
+  title     = {{RL4CO}: an Extensive Reinforcement Learning for Combinatorial Optimization Benchmark},
+  booktitle = {Proceedings of the ACM SIGKDD International Conference on Knowledge Discovery \& Data Mining (KDD)},
+  year      = {2025}
+}
+@inproceedings{Akiba2019Optuna,
+  author    = {Akiba, Takuya and Sano, Shotaro and Yanase, Toshihiko and Ohta, Takeru and Koyama, Masanori},
+  title     = {Optuna: A Next-Generation Hyperparameter Optimization Framework},
+  booktitle = {Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery \& Data Mining},
+  pages     = {2623--2631},
+  year      = {2019}
+}
+@article{ENN_GFN_2025,
+  author  = {Laajil, Aya and Shtanchaev, Abduragim and Muhammad, Sajan and Moulines, Eric and Lahlou, Salem},
+  title   = {Improved Exploration in {GFlowNets} via Enhanced Epistemic Neural Networks},
+  journal = {arXiv preprint arXiv:2506.16313},
+  year    = {2025}
+}
+\end{filecontents}
+
+\addbibresource{referencias.bib}
+
+% ── Pagina y tipografia ─────────────────────────────────────
+\geometry{letterpaper, margin=1in}
+\setlength{\parindent}{1.25cm}
+\onehalfspacing
+
+% ── Colores institucionales UANL ────────────────────────────
+\definecolor{uanlblue}{RGB}{0,56,101}
+\definecolor{uanlgold}{RGB}{200,155,40}
+\definecolor{lightbg}{RGB}{245,246,248}
+\definecolor{rowgray}{RGB}{235,237,240}
+
+% ── Configuracion hyperref ──────────────────────────────────
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = uanlblue,
+  citecolor  = uanlblue,
+  urlcolor   = uanlblue
+}
+
+% ════════════════════════════════════════════════════════════
+\begin{document}
+
+% ── PORTADA ─────────────────────────────────────────────────
+\begin{titlepage}
+\pagecolor{white}
+
+\begin{tikzpicture}[remember picture,overlay]
+  \fill[uanlblue] (current page.north west)
+      rectangle ++(\paperwidth,-1.2cm);
+  \fill[uanlgold] ([yshift=-1.2cm]current page.north west)
+      rectangle ++(\paperwidth,-0.22cm);
+  \fill[uanlgold] (current page.south west)
+      rectangle ++(\paperwidth,0.22cm);
+  \fill[uanlblue] ([yshift=0.22cm]current page.south west)
+      rectangle ++(\paperwidth,1.2cm);
+\end{tikzpicture}
+
+\vspace*{0.5cm}
+
+\begin{center}
+
+{\fontsize{15.5}{19}\selectfont\bfseries\textcolor{uanlblue}{%
+  UNIVERSIDAD AUT\'ONOMA DE NUEVO LE\'ON}}\\[0.3cm]
+{\fontsize{11.5}{14}\selectfont\textsc{\textcolor{uanlblue}{%
+  Facultad de Ingenier\'ia Mec\'anica y El\'ectrica}}}
+
+\vspace{0.6cm}
+{\color{uanlgold}\rule{0.55\textwidth}{1.6pt}}
+\vspace{0.8cm}
+
+{\fontsize{13.0}{18}\selectfont\bfseries\textcolor{uanlblue}{%
+  MUESTREO H\'IBRIDO MEDIANTE REDES DE FLUJO\\[0.2cm]
+  GENERATIVO Y OPTIMIZACI\'ON POR COLONIA DE\\[0.2cm]
+  HORMIGAS PARA EL PROBLEMA DE ENRUTAMIENTO\\[0.2cm]
+  DE VEH\'ICULOS ESTOC\'ASTICO}}
+
+\vspace{0.8cm}
+{\color{uanlgold}\rule{0.55\textwidth}{1.6pt}}
+\vspace{1.0cm}
+
+{\fontsize{16}{20}\selectfont\bfseries\textcolor{uanlblue}{%
+  A\,N\,T\,E\,P\,R\,O\,Y\,E\,C\,T\,O\ \ D\,E\ \ T\,E\,S\,I\,S}}
+
+\vspace{0.2cm}
+{\fontsize{11}{14}\selectfont\textit{Para obtener el t\'itulo de:}}\\[0.45cm]
+{\fontsize{13.5}{17}\selectfont\bfseries\textit{%
+  Ingeniero en Tecnolog\'ias de Software}}
+
+\vspace{0.5cm}
+
+\colorbox{lightbg}{%
+  \begin{minipage}{0.68\textwidth}
+    \vspace{0.5cm}
+    \centering
+    {\small\textit{\textcolor{uanlblue}{Presenta:}}}\\[0.3cm]
+    {\fontsize{14}{17}\selectfont\bfseries Abraham Casta\~neda Quintero}\\[0.5cm]
+    {\color{uanlgold}\rule{0.7\linewidth}{0.8pt}}\\[0.4cm]
+    {\small\textit{\textcolor{uanlblue}{Director de Tesis:}}}\\[0.3cm]
+    {\fontsize{12}{15}\selectfont\bfseries Dr. Jos\'e Arturo Berrones Santos}\\[0.5cm]
+    \vspace{0.5cm}
+  \end{minipage}%
+}
+
+\end{center}
+
+\vfill
+
+\begin{center}
+  {\small\textcolor{uanlblue}{San Nicol\'as de los Garza, Nuevo Le\'on%
+  \enspace\textbullet\enspace 2026}}
+\end{center}
+
+\vspace{1.4cm}
+\end{titlepage}
+
+% ── Paginacion romana ────────────────────────────────────────
+\pagenumbering{roman}
+\tableofcontents
+\newpage
+
+% ════════════════════════════════════════════════════════════
+\pagenumbering{arabic}
+
+% ────────────────────────────────────────────────────────────
+\chapter*{Antecedentes Hist\'oricos y Te\'oricos}
+\addcontentsline{toc}{chapter}{Antecedentes Hist\'oricos y Te\'oricos}
+% ────────────────────────────────────────────────────────────
+
+El campo de la investigaci\'on de operaciones y la optimizaci\'on log\'istica ha estado hist\'oricamente dominado por el Problema de Enrutamiento de Veh\'iculos (VRP, por sus siglas en ingl\'es). Concebido formalmente en la d\'ecada de 1950, el VRP representa uno de los desaf\'ios matem\'aticos m\'as estudiados en la ciencia de la computaci\'on debido a su profunda aplicabilidad industrial en cadenas de suministro, gesti\'on de flotas, log\'istica de \'ultima milla y redes de transporte. El objetivo fundamental del VRP es dise\~nar un conjunto de rutas \'optimas para una flota de veh\'iculos que deben atender a una serie de clientes distribuidos geogr\'aficamente, minimizando el costo total operativo sujeto a restricciones estrictas como la capacidad m\'axima de carga de los veh\'iculos, ventanas de tiempo de servicio obligatorias y tiempos m\'aximos de jornada laboral \cite{Heakl2025SVRP}.
+
+Desde la perspectiva de la complejidad computacional, el VRP y sus m\'ultiples variantes pertenecen a la clase de problemas NP-duros \cite{Bengio2021Architectures, Bengio2023Foundations}. Esto implica que el tiempo requerido para encontrar una soluci\'on globalmente \'optima escala de manera exponencial conforme aumenta el n\'umero de clientes o nodos en el grafo. Hist\'oricamente, la comunidad cient\'ifica abord\'o este problema a trav\'es de tres grandes paradigmas. El primer paradigma incluye los m\'etodos exactos, fundamentados en algoritmos de ramificaci\'on y acotaci\'on (\textit{branch-and-bound}), planos de corte (\textit{branch-and-cut}) y programaci\'on din\'amica. Si bien estos enfoques garantizan matem\'aticamente la identificaci\'on del \'optimo global, su aplicabilidad se restringe severamente a instancias de tama\~no reducido debido a la intratabilidad computacional, volvi\'endolos inoperantes en escenarios de log\'istica urbana masiva donde el n\'umero de nodos supera los varios cientos o miles de clientes.
+
+Para sortear las barreras de la intratabilidad matem\'atica, el segundo paradigma emergi\'o en la forma de algoritmos heur\'isticos y metaheur\'isticas. M\'etodos como el Recocido Simulado (\textit{Simulated Annealing}), la B\'usqueda Tab\'u (\textit{Tabu Search}), los Algoritmos Gen\'eticos y la Optimizaci\'on por Colonia de Hormigas (\textit{Ant Colony Optimization}, ACO) dominaron el estado del arte industrial durante d\'ecadas \cite{Kim2024GFACS}. Estas metaheur\'isticas sacrifican la garant\'ia de optimalidad global a cambio de encontrar soluciones sub\'optimas de muy alta calidad en tiempos de c\'omputo polinomiales. En particular, la Optimizaci\'on por Colonia de Hormigas se destac\'o por su capacidad para explorar vastos espacios de soluci\'on topol\'ogicos mediante el despliegue de m\'ultiples agentes concurrentes que construyen rutas de forma estoc\'astica, depositando rastros de feromona virtual que alteran las probabilidades de transici\'on en iteraciones futuras \cite{Kim2024GFACS}. Sin embargo, la limitaci\'on inherente de todas las metaheur\'isticas cl\'asicas radica en su dependencia extrema del dise\~no manual de reglas emp\'iricas, la calibraci\'on artesanal de hiperpar\'ametros espec\'ificos para cada distribuci\'on de datos, y una ejecuci\'on computacional desde cero para cada nueva instancia del problema. Cada vez que cambia el mapa de clientes, la metaheur\'istica debe reiniciar su proceso iterativo, lo que impide su uso eficiente en aplicaciones de enrutamiento din\'amico en tiempo real.
+
+El tercer y m\'as reciente paradigma es la Optimizaci\'on Combinatoria Neuronal (NCO, por sus siglas en ingl\'es). Impulsada por los avances masivos en el aprendizaje profundo (\textit{Deep Learning}) y el procesamiento de secuencias, la NCO busca reemplazar el dise\~no de reglas heur\'isticas manuales con redes neuronales parametrizadas que aprenden a mapear directamente las caracter\'isticas geom\'etricas y espaciales de un problema hacia una soluci\'on \'optima \cite{Kwon2020POMO}. Los enfoques iniciales utilizaron Redes de Apuntadores (\textit{Pointer Networks}) y arquitecturas recurrentes entrenadas mediante aprendizaje supervisado. No obstante, el aprendizaje supervisado exig\'ia la generaci\'on previa de millones de rutas \'optimas mediante solucionadores exactos lentos para actuar como etiquetas de entrenamiento, un proceso que result\'o ser un cuello de botella inasumible para problemas a gran escala.
+
+En consecuencia, el Aprendizaje por Refuerzo (\textit{Reinforcement Learning}, RL) se consolid\'o como el motor de entrenamiento dominante en NCO. A trav\'es de algoritmos como REINFORCE y esquemas de Actor-Cr\'itico, los modelos neuronales aprendieron a optimizar las rutas explorando el entorno y utilizando el costo final de la ruta generada como se\~nal de recompensa, eliminando por completo la necesidad de datos etiquetados. El hito m\'as significativo en este paradigma fue la introducci\'on de la arquitectura de Modelo de Atenci\'on (\textit{Attention Model}) combinada con la estrategia de Optimizaci\'on de Pol\'itica con M\'ultiples \'Optimos (POMO) \cite{Kwon2020POMO}. POMO revolucion\'o la resoluci\'on neuronal al explotar las simetr\'ias inherentes del VRP: una ruta es equivalente independientemente del nodo desde el cual el veh\'iculo inicie su recorrido. Al forzar a la red neuronal a generar m\'ultiples trayectorias simult\'aneas comenzando desde diferentes nodos \'optimos y utilizando la media de estas recompensas como una l\'inea base compartida de bajo sesgo y baja varianza, POMO estabiliz\'o dram\'aticamente el entrenamiento, permitiendo que arquitecturas basadas en Transformers resolvieran instancias deterministas de VRP con cien clientes en fracciones de segundo y con brechas de optimalidad m\'inimas respecto a los solucionadores algor\'itmicos \cite{Kwon2020POMO, Berto2023RL4CO}.
+
+\begin{table}[ht]
+\centering
+\caption{Paradigmas de Optimizaci\'on para el Enrutamiento de Veh\'iculos}
+\label{tab:paradigmas}
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{5pt}
+\small
+\begin{tabular}{>{\bfseries\color{uanlblue}}p{3.5cm}
+                >{\raggedright\arraybackslash}p{4.2cm}
+                >{\raggedright\arraybackslash}p{4.2cm}
+                >{\centering\arraybackslash}p{3.1cm}}
+\toprule
+\rowcolor{uanlblue}
+{\color{white}\textbf{Paradigma}} &
+{\color{white}\textbf{Ventaja Principal}} &
+{\color{white}\textbf{Desventaja Cr\'itica}} &
+{\color{white}\textbf{Escalabilidad}} \\
+\midrule
+M\'etodos Exactos (Branch \& Cut) & Garantizan el \'optimo global con certeza matem\'atica. & Intratabilidad temporal por explosi\'on combinatoria. & Muy Baja ($< 100$ nodos) \\
+\rowcolor{rowgray}
+Metaheur\'isticas Cl\'asicas (ACO, Tabu) & Soluciones de alta calidad sin entrenamiento previo. & Requieren ejecuci\'on desde cero; dise\~no manual. & Moderada ($100$ - $1000$ nodos) \\
+NCO (RL Supervisado) & Inferencia r\'apida tras el entrenamiento. & Dependencia total de datos etiquetados caros. & Baja (Limitada por datos) \\
+\rowcolor{rowgray}
+NCO (RL Determinista) (POMO, AM) & Inferencia en milisegundos; entrenamiento sin etiquetas. & Fragilidad extrema ante estocasticidad; colapso de modos. & Alta ($> 1000$ nodos en entornos est\'aticos) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ────────────────────────────────────────────────────────────
+\chapter*{La Barrera de la Estocasticidad y el Marco SVRPBench}
+\addcontentsline{toc}{chapter}{La Barrera de la Estocasticidad y el Marco SVRPBench}
+% ────────────────────────────────────────────────────────────
+
+A pesar de la madurez matem\'atica y el \'exito emp\'irico de la Optimizaci\'on Combinatoria Neuronal basada en POMO y modelos de atenci\'on, la translaci\'on de estos sistemas a la log\'istica urbana real ha revelado vulnerabilidades estructurales catastr\'oficas. El modelo matem\'atico tradicional del VRP asume un universo puramente est\'atico y determinista: los tiempos de viaje entre el nodo $A$ y el nodo $B$ son constantes inmutables, la presencia del cliente est\'a garantizada, y las demandas son conocidas a priori con exactitud milim\'etrica. Esta idealizaci\'on es profundamente incompatible con la naturaleza entr\'opica de las cadenas de suministro modernas \cite{Heakl2025SVRP}.
+
+El Problema de Enrutamiento de Veh\'iculos Estoc\'astico (SVRP, por sus siglas en ingl\'es) surge como la formulaci\'on rigurosa que incorpora la incertidumbre expl\'icita dentro de las variables de decisi\'on. En el SVRP, componentes cr\'iticos como la velocidad de tr\'ansito, el tiempo de servicio in situ, y las fluctuaciones de la demanda se modelan como variables aleatorias extra\'idas de distribuciones de probabilidad complejas. En este r\'egimen incierto, una ruta que es matem\'aticamente \'optima bajo asunciones deterministas puede volverse inviable o incurrir en costos astron\'omicos de penalizaci\'on en el mundo real.
+
+Para estudiar cient\'ificamente este fen\'omeno y proporcionar una arena de evaluaci\'on estandarizada, la literatura reciente ha introducido el marco \texttt{SVRPBench} (\textit{Stochastic Vehicle Routing Problem Benchmark}) \cite{Heakl2025SVRP}. \texttt{SVRPBench} representa la plataforma de simulaci\'on de alta fidelidad m\'as avanzada hasta la fecha, dise\~nada para inyectar din\'amicas estoc\'asticas a escala urbana que reflejan meticulosamente las condiciones log\'isticas emp\'iricas. El marco desaf\'ia a la comunidad de inteligencia artificial al modelar la incertidumbre a trav\'es de cuatro vectores estoc\'asticos fundamentales, cada uno fundamentado en an\'alisis emp\'iricos de tr\'afico y comportamiento log\'istico urbano \cite{Heakl2025SVRP}:
+
+\begin{enumerate}[label=\textbf{\arabic*.},leftmargin=1.2cm,itemsep=0.5em]
+  \item \textbf{Congesti\'on Dependiente del Tiempo mediante Mezclas Gaussianas:} \texttt{SVRPBench} abandona la velocidad de tr\'ansito euclidiana simple. En su lugar, parametriza la congesti\'on vial utilizando distribuciones de mezcla gaussiana (\textit{Gaussian Mixtures}) que simulan con precisi\'on los picos de tr\'afico durante las horas de mayor afluencia.
+  \item \textbf{Retrasos Estoc\'asticos Modelados con Distribuciones Log-Normales:} Las demoras no siguen una distribuci\'on normal sim\'etrica. La mayor\'ia de los viajes ocurren sin incidentes, pero ocasionalmente ocurren retrasos severos. La distribuci\'on log-normal captura esta asimetr\'ia de cola pesada (\textit{heavy-tailed}).
+  \item \textbf{Disrupciones por Accidentes mediante Procesos de Poisson:} Introduce la probabilidad discreta de accidentes de tr\'ansito modelados a trav\'es de procesos de Poisson, que imponen fallos sist\'emicos localizados que pueden invalidar segmentos enteros del grafo combinatorio.
+  \item \textbf{Ventanas de Tiempo Heterog\'eneas y Emp\'iricas:} Las disponibilidades se dividen en distribuciones comerciales y residenciales asim\'etricas.
+\end{enumerate}
+
+La evaluaci\'on rigurosa de las arquitecturas de NCO del estado del arte bajo el marco \texttt{SVRPBench} ha arrojado conclusiones preocupantes: los modelos neuronales deterministas dominantes sufren una degradaci\'on de rendimiento masiva que supera el $20\%$ frente a los desplazamientos distribucionales inducidos por la incertidumbre estoc\'astica \cite{Heakl2025SVRP}. Al haber sido entrenados para maximizar una recompensa est\'atica, estos modelos colapsan en modos singulares, perdiendo la diversidad representacional necesaria para implementar planes de contingencia eficientes.
+
+% ────────────────────────────────────────────────────────────
+\chapter*{El Surgimiento de las Redes de Flujo Generativo (GFlowNets)}
+\addcontentsline{toc}{chapter}{El Surgimiento de las Redes de Flujo Generativo (GFlowNets)}
+% ────────────────────────────────────────────────────────────
+
+Frente a la vulnerabilidad estructural del Aprendizaje por Refuerzo est\'andar ante el SVRP, las Redes de Flujo Generativo (Generative Flow Networks o GFlowNets) emergen como un paradigma probabil\'istico fundamentado te\'oricamente para resolver problemas de diversidad en espacios combinatorios \cite{Bengio2021Architectures, Bengio2023Foundations}. Las GFlowNets abandonan el objetivo exclusivo de maximizaci\'on de recompensas. En cambio, su objetivo de optimizaci\'on es aprender una pol\'itica estoc\'astica secuencial que construya objetos composicionales discretos con una probabilidad de muestreo que sea estrictamente proporcional a una funci\'on de recompensa no normalizada.
+
+La matem\'atica subyacente de las GFlowNets modela el espacio de soluci\'on como un Grafo Ac\'iclico Dirigido (DAG), $\mathcal{G} = (\mathcal{V}, \mathcal{E})$. El estado inicial $s_0$ representa una soluci\'on vac\'ia. Cada transici\'on dirigida representa una acci\'on constructiva v\'alida, llevando a un nuevo estado parcial. Los estados terminales, denominados $x \in \mathcal{X}$, representan soluciones completas y evaluables. Las GFlowNets entrenan una red neuronal para garantizar que la suma de los flujos que ingresan a un estado parcial sea igual a la suma de los flujos que salen del mismo hacia todos sus posibles hijos \cite{Bengio2023Foundations}. Cuando esta condici\'on de conservaci\'on de Markov se cumple, el modelo induce una pol\'itica de avance $P_F$ y una pol\'itica de retroceso $P_B$ que alinean $P_T(x) \propto R(x)$ de forma exacta.
+
+Para entrenar estas pol\'iticas en problemas complejos, la literatura introdujo el objetivo de Balance de Trayectoria (Trajectory Balance, TB) \cite{Malkin2022Trajectory}, que optimiza las pol\'iticas a lo largo de una trayectoria completa $\tau = (s_0 \to \dots \to s_n)$:
+
+\begin{equation}
+\mathcal{L}_{TB}(\tau; \theta) = \left( \log \frac{Z_\theta \prod_{t=0}^{n-1} P_F(s_{t+1}|s_t; \theta)}{\prod_{t=0}^{n-1} P_B(s_t|s_{t+1}; \theta) R(s_n)} \right)^2
+\label{eq:tb}
+\end{equation}
+
+A pesar del \'exito del TB, investigaciones de frontera han detectado inestabilidades locales severas debido a que TB eval\'ua la trayectoria de forma hol\'istica, ignorando microestructuras locales importantes en el enrutamiento \cite{Zhang2025Hybrid}. Para mitigar esto, se ha reintroducido el principio de Balance Detallado (Detailed Balance, DB) a nivel de transici\'on at\'omica:
+
+\begin{equation}
+\mathcal{L}_{DB}(s, s'; \theta) = \left( \log \frac{F_\theta(s) P_F(s'|s; \theta)}{F_\theta(s') P_B(s|s'; \theta)} \right)^2
+\label{eq:db}
+\end{equation}
+
+La vanguardia del estado del arte actual es la arquitectura Hybrid-Balance GFlowNet (HBG), una fusi\'on sin\'ergica que amalgama las fortalezas globalizadoras del TB con la consistencia microsc\'opica del DB de manera adaptativa para resolver problemas de ruteo \cite{Zhang2025Hybrid}. Adicionalmente, mediante la integraci\'on de Redes Neuronales Epist\'emicas (ENN), se dota al modelo de la capacidad de cuantificar la incertidumbre de sus propias predicciones y guiar activamente la exploraci\'on de nuevas rutas \cite{ENN_GFN_2025}.
+
+% ────────────────────────────────────────────────────────────
+\chapter*{Definici\'on del Problema de Investigaci\'on}
+\addcontentsline{toc}{chapter}{Definici\'on del Problema de Investigaci\'on}
+% ────────────────────────────────────────────────────────────
+
+El estado del arte actual presenta una segmentaci\'on tecnol\'ogica cr\'itica. Por un lado, la Optimizaci\'on Combinatoria Neuronal basada en Aprendizaje por Refuerzo puro (como POMO) logra eficiencias computacionales notables pero fracasa espectacularmente frente a la incertidumbre estoc\'astica urbana, colapsando ante variaciones distribucionales. Por otro lado, la investigaci\'on en Generative Flow Networks ha alcanzado formulaciones matem\'aticamente ricas, como el esquema Hybrid-Balance y la parametrizaci\'on epist\'emica, capaces de modelar la diversidad y el riesgo, pero que carecen de validaci\'on sobre entornos estoc\'asticos de alta fidelidad orientados a la log\'istica.
+
+En s\'intesis, el problema de investigaci\'on se formula a trav\'es de la siguiente pregunta cient\'ifica:
+
+\begin{center}
+  \colorbox{lightbg}{%
+    \begin{minipage}{0.85\textwidth}
+      \vspace{0.4cm}
+      \centering
+      \textit{\guillemotleft\textquestiondown Es posible mejorar de forma estad\'isticamente significativa la robustez y viabilidad t\'ectica de soluciones para el problema de ruteo estoc\'astico mediante un marco h\'ibrido que combine el muestreo adaptativo de una red neuronal Hybrid-Balance GFlowNet con el refinamiento poblacional de colonias de hormigas estoc\'asticas?\guillemotright}
+      \vspace{0.4cm}
+    \end{minipage}%
+  }
+\end{center}
+
+% ────────────────────────────────────────────────────────────
+\chapter*{Hip\'otesis de Trabajo}
+\addcontentsline{toc}{chapter}{Hip\'otesis de Trabajo}
+% ────────────────────────────────────────────────────────────
+
+\section*{Hip\'otesis General}
+La integraci\'on arquitect\'onica de una Red de Flujo Generativo con Balance H\'ibrido (HBG) y cuantificaci\'on de incertidumbre epist\'emica (ENN) como parametrizador a priori dentro de un enjambre estoc\'astico paralelo (ACO), entrenada bajo la infraestructura desacoplada de \texttt{RL4CO}, producir\'a un motor de b\'usqueda combinatorio neuronal capaz de superar estad\'isticamente en robustez (tasa de factibilidad bajo ruido log-normal) y eficiencia de inferencia a los m\'etodos neuronales deterministas (POMO, AM) y heur\'isticas industriales convencionales en el marco de simulaci\'on \texttt{SVRPBench}.
+
+\section*{Hip\'otesis Espec\'ificas}
+\begin{enumerate}[label=\textbf{H\arabic*.},leftmargin=1.5cm,itemsep=0.5em]
+  \item La incorporaci\'on expl\'icita de la penalizaci\'on de Balance Detallado (DB) junto al Balance de Trayectoria (TB) mitigar\'a los picos de p\'erdida asint\'oticos en espacios complejos, mejorando la convergencia en instancias con ventanas de tiempo r\'igidas.
+  \item La retroalimentaci\'on as\'incrona de trayectorias estoc\'asticas desde el motor de Colonia de Hormigas hacia el b\'ufer fuera de pol\'itica de la GFlowNet incrementar\'a la diversidad del hiperespacio de soluciones generado, limitando el colapso de modo.
+  \item La cuantificaci\'on activa de la incertidumbre mediante Redes Neuronales Epist\'emicas guiar\'ar\'a el muestreo hacia zonas con alta varianza de penalizaci\'on, descubriendo rutas de recurso operativo resilientes frente a disrupciones de Poisson.
+\end{enumerate}
+
+% ────────────────────────────────────────────────────────────
+\chapter*{Objetivos de la Investigaci\'on}
+\addcontentsline{toc}{chapter}{Objetivos de la Investigaci\'on}
+% ────────────────────────────────────────────────────────────
+
+\section*{Objetivo General}
+Conceptualizar, desarrollar y validar un marco algor\'itmico h\'ibrido de frontera, denominado \textit{Epistemic Hybrid-Balance Generative Flow Ant Colony Sampler} (EHBG-FACS), dirigido a la optimizaci\'on robusta y eficiente de grandes espacios de soluci\'on combinatorios bajo incertidumbre, aplic\'andolo espec\'ificamente al Problema de Enrutamiento de Veh\'iculos Estoc\'astico simulado en alta fidelidad mediante \texttt{SVRPBench}.
+
+\section*{Objetivos Espec\'ificos}
+\begin{enumerate}[label=\textbf{OE\arabic*.},leftmargin=1.8cm,itemsep=0.5em]
+  \item Integrar el marco de validaci\'on \texttt{SVRPBench} dentro de la infraestructura modular de aprendizaje por refuerzo extensivo \texttt{RL4CO}, automatizando la generaci\'on de instancias urbanas din\'amicas.
+  \item Dise\~nar e implementar en PyTorch una arquitectura codificador-decodificador basada en Transformers parametrizada como una GFlowNet de Balance H\'ibrido (HBG).
+  \item Desarrollar el m\'odulo de cuantificaci\'on de riesgo operativo mediante Redes Neuronales Epist\'emicas (ENN) sobre el flujo descendente.
+  \item Acoplar la pol\'itica estoc\'astica resultante de la GFlowNet con el algoritmo metaheur\'istico de Colonia de Hormigas (GFACS) como matriz de decisi\'on a priori din\'amica.
+  \item Cuantificar emp\'iricamente la superioridad del modelo propuesto en exactitud, tasa de factibilidad y tiempos de inferencia en comparaci\'on con m\'etodos del estado del arte.
+\end{enumerate}
+
+% ────────────────────────────────────────────────────────────
+\chapter*{Metodolog\'ia y Dise\~no Experimental}
+\addcontentsline{toc}{chapter}{Metodolog\'ia y Dise\~no Experimental}
+% ────────────────────────────────────────────────────────────
+
+La investigaci\'on adopta una metodolog\'ia experimental cuantitativa estructurada en cinco fases de ejecuci\'on sobre la biblioteca modular \texttt{RL4CO} \cite{Berto2023RL4CO}:
+
+\section*{Fase 1: Configuraci\'on del Ecosistema de Benchmarking}
+La base de simulaci\'on consistir\'a en el ecosistema \texttt{SVRPBench} \cite{Heakl2025SVRP}. Se generar\'an conjuntos de datos sint\'eticos que abarcar\'an tres categor\'ias topol\'ogicas: instancias de peque\~na escala (50 a 100 nodos), escala media (100 a 300 nodos con despliegues multi-dep\'osito) y configuraciones operativas masivas ($>500$ nodos). A cada arco geogr\'afico se le inyectar\'an las distribuciones din\'amicas descritas: perfiles bimodales de tr\'afico usando mezclas gaussianas, retardos log-normales asim\'etricos y penalizaciones temporales modeladas por procesos de Poisson.
+
+\section*{Fase 2: Dise\~no del Modelo Neuronal Codificador-Decodificador HBG}
+La arquitectura profunda ser\'a programada en PyTorch. El m\'odulo codificador implementar\'a un Transformer Gr\'afico (\textit{Graph Transformer}) modificado que procesar\'a caracter\'isticas est\'aticas de los clientes y variables de varianza temporal de tr\'afico. El m\'odulo decodificador calcular\'a el flujo de estado $F_\theta(s)$ y parametrizar\'a la pol\'itica de avance $P_F(s'|s; \theta)$ y de retroceso $P_B(s|s'; \theta)$. El bucle de entrenamiento unificar\'a de manera adaptativa los objetivos de Balance de Trayectoria (TB) y Balance Detallado (DB) mediante el esquema HBG \cite{Zhang2025Hybrid}.
+
+\section*{Fase 3: Integraci\'on Epist\'emica de Varianza y Riesgo Operativo}
+Se aplicar\'a una modificaci\'on matem\'atica en la capa de atenci\'on final para transformarla en una Red Neuronal Epist\'emica (ENN) \cite{ENN_GFN_2025}. Mediante aproximaciones de ensamble utilizando \textit{dropout} en tiempo de inferencia, se estimar\'a la varianza epist\'emica sobre el espacio latente. La funci\'on de recompensa de la GFlowNet penalizar\'a activamente trayectorias de alto costo esperado, pero promover\'a la exploraci\'on de subgrafos con alta incertidumbre epist\'emica para localizar soluciones altamente resilientes.
+
+\section*{Fase 4: Sinergia Metaheur\'istica Externa (Muestreador GFACS)}
+Durante el tiempo de prueba, en lugar de una decodificaci\'on puramente codiciosa, las probabilidades calculadas por la pol\'itica neuronal $P_F$ poblar\'an la matriz de heur\'istica a priori de un algoritmo ACO descentralizado \cite{Kim2024GFACS}. Decenas de enjambres virtuales procesar\'an m\'ultiples iteraciones estoc\'asticas de simulaci\'on de tr\'afico. Las trayectorias que demuestren una alta robustez actualizar\'an la matriz de feromona. El sistema utilizar\'a un b\'ufer de repetici\'on fuera de pol\'itica (\textit{off-policy replay buffer}) para retroalimentar estas soluciones exitosas a la red neuronal GFlowNet.
+
+\section*{Fase 5: Validaci\'on Cruzada y Optimizaci\'on de Hiperpar\'ametros}
+Los hiperpar\'ametros cr\'iticos del modelo se sintonizar\'an mediante la librer\'ia Optuna \cite{Akiba2019Optuna}. Se testear\'a la superioridad algor\'itmica del modelo EHBG-FACS frente a l\'ineas base mediante an\'alisis de varianza (ANOVA) multifactorial con un nivel de significancia estad\'istica de $\alpha = 0.05$.
+
+\begin{table}[ht]
+\centering
+\caption{Espacio de b\'usqueda de hiperpar\'ametros del sistema EHBG-FACS}
+\label{tab:espacio}
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{6pt}
+\small
+\begin{tabular}{>{\bfseries\color{uanlblue}}p{4.6cm}
+                >{\raggedright\arraybackslash}p{4.2cm}
+                >{\centering\arraybackslash}p{3.2cm}}
+\toprule
+\rowcolor{uanlblue}
+{\color{white}\textbf{Hiperpar\'ametro S\'istemico}} &
+{\color{white}\textbf{Espacio de B\'usqueda}} &
+{\color{white}\textbf{M\'odulo Impactado}} \\
+\midrule
+Coeficiente HBG ($\lambda_{DB}$) & Uniforme: $[0.1,\,0.9]$ & Ponderaci\'on de p\'erdida TB vs. DB \\
+\rowcolor{rowgray}
+Tasa de Evaporaci\'on ($\rho$) & Log-Uniforme: $[10^{-3},\,10^{-1}]$ & Din\'amica de feromonas en ACO \\
+Temperatura de Flujo ($T$) & Uniforme: $[0.5,\,5.0]$ & Suavizado de la pol\'itica $P_F$ \\
+\rowcolor{rowgray}
+Tasa de Aprendizaje AdamW & Log-Uniforme: $[10^{-5},\,10^{-3}]$ & Codificador-decodificador Transformer \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ────────────────────────────────────────────────────────────
+\chapter*{Contribuci\'on Cient\'ifica y Avance de Frontera}
+\addcontentsline{toc}{chapter}{Contribuci\'on Cient\'ifica y Avance de Frontera}
+% ────────────────────────────────────────────────────────────
+
+La ejecuci\'on del anteproyecto propuesto aportar\'a tres contribuciones fundamentales a la ciencia de la computaci\'on y la investigaci\'on de operaciones:
+
+\begin{enumerate}[label=\textbf{C\arabic*.},leftmargin=1.5cm,itemsep=0.5em]
+  \item \textbf{Fundamentaci\'on de un Paradigma H\'ibrido Estoc\'astico:} El estudio introducir\'a la primera formalizaci\'on documentada que unifica la p\'erdida HBG con redes epist\'emicas para dotar a las GFlowNets de resiliencia expl\'icita ante perturbaciones de recompensa urbana estoc\'astica \cite{Zhang2025Hybrid, ENN_GFN_2025}.
+  \item \textbf{Integraci\'on As\'incrona de Redes Profundas y Metaheur\'isticas:} Se validar\'a de forma emp\'irica el uso de distribuciones neuronales probabil\'isticas completas (en lugar de puntuaciones de aristas manuales) para inicializar b\'usquedas descentralizadas masivamente paralelas (ACO) en entornos de tr\'afico din\'amicos.
+  \item \textbf{Liberaci\'on de un Framework Reproducible de Ruteo Tolerante a Fallos:} Toda la base del ecosistema \texttt{EHBG-FACS}, construido sobre la estructura desacoplada de \texttt{RL4CO}, se depositar\'a en un repositorio de c\'odigo abierto para su libre utilizaci\'on industrial y cient\'ifica \cite{Berto2023RL4CO}.
+\end{enumerate}
+
+% ────────────────────────────────────────────────────────────
+\chapter*{Viabilidad Operativa y Cronograma de Trabajo}
+\addcontentsline{toc}{chapter}{Viabilidad Operativa y Cronograma de Trabajo}
+% ────────────────────────────────────────────────────────────
+
+El proyecto est\'a calendarizado para ejecutarse en el transcurso de seis meses. La viabilidad t\'ecnica se apoya en el uso de la infraestructura acelerada del framework modular de c\'omputo en la nube \texttt{RL4CO}, reduciendo significativamente la sobrecarga ingenieril al externalizar la l\'ogica del simulador de ruteo base.
+
+\begin{table}[ht]
+\centering
+\caption{Cronograma tentativo de actividades para el desarrollo de la tesis (6 meses)}
+\label{tab:cronograma}
+\renewcommand{\arraystretch}{1.5}
+\setlength{\tabcolsep}{4pt}
+\small
+\begin{tabular}{>{\bfseries\color{uanlblue}}p{6.2cm}
+                *{6}{>{\centering\arraybackslash}p{0.85cm}}}
+\toprule
+\rowcolor{uanlblue}
+{\color{white}\textbf{Actividad Metodol\'ogica Clave}} &
+{\color{white}\small Mes 1} & {\color{white}\small Mes 2} &
+{\color{white}\small Mes 3} & {\color{white}\small Mes 4} &
+{\color{white}\small Mes 5} & {\color{white}\small Mes 6} \\
+\midrule
+
+\rowcolor{rowgray}
+\multicolumn{7}{l}{\normalfont\textit{Fase 1 --- Orquestaci\'on del Entorno}}\\
+Revisi\'on del estado del arte algor\'itmico  & \cellcolor{uanlgold} & & & & & \\
+Integraci\'on de \texttt{SVRPBench} en \texttt{RL4CO} & \cellcolor{uanlgold} & & & & & \\
+
+\rowcolor{rowgray}
+\multicolumn{7}{l}{\normalfont\textit{Fase 2 --- Dise\~no de la Red HBG}}\\
+Implementaci\'on del Transformer en PyTorch & & \cellcolor{uanlblue} & \cellcolor{uanlblue} & & & \\
+Optimizaci\'on de las ecuaciones TB y DB  & & \cellcolor{uanlblue} & \cellcolor{uanlblue} & & & \\
+
+\rowcolor{rowgray}
+\multicolumn{7}{l}{\normalfont\textit{Fase 3 --- Adaptaci\'on de Riesgo Epist\'emico}}\\
+Modificaci\'on de la capa ENN e incertidumbre & & & \cellcolor{uanlgold} & \cellcolor{uanlgold} & & \\
+Modificaci\'on estoc\'astica de recompensas    & & & \cellcolor{uanlgold} & \cellcolor{uanlgold} & & \\
+
+\rowcolor{rowgray}
+\multicolumn{7}{l}{\normalfont\textit{Fase 4 --- Acoplamiento Metaheur\'istico}}\\
+Dise\~no de subrutinas de Colonia de Hormigas  & & & & \cellcolor{uanlblue} & \cellcolor{uanlblue} & \\
+Pruebas de b\'ufer de repetici\'on off-policy & & & & \cellcolor{uanlblue} & \cellcolor{uanlblue} & \\
+
+\rowcolor{rowgray}
+\multicolumn{7}{l}{\normalfont\textit{Fase 5 --- Validaci\'on y Redacci\'on}}\\
+Simulaci\'on, escalabilidad y Optuna      & & & & & \cellcolor{uanlgold} & \cellcolor{uanlgold} \\
+Compilaci\'on de tesis y escritura fnal   & & & & & \cellcolor{uanlblue} & \cellcolor{uanlblue} \\
+
+\bottomrule
+\multicolumn{7}{l}{%
+  \small\textcolor{uanlgold}{$\blacksquare$}~Fases de Dise\~no / An\'alisis \quad
+  \textcolor{uanlblue}{$\blacksquare$}~Fases de Programaci\'on / Escritura}\\
+\end{tabular}
+\end{table}
+
+% ────────────────────────────────────────────────────────────
+\printbibliography
+
+\end{document}
