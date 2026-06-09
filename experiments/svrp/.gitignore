@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Cloned upstream benchmark (regenerable via README)
+third_party/
+
+# Generated instances & raw results (regenerable; keep figures/ versioned)
+data/
+results/
+
+# OS
+.DS_Store
