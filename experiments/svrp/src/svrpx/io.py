@@ -49,21 +49,28 @@ def _make_single_city(num_customers: int) -> City:
     return City((cx, cy), city_spread)
 
 
-def _binding_capacity(demands: np.ndarray) -> Tuple[float, int]:
-    """Capacidad restrictiva y número de vehículos.
+def _capacity(demands: np.ndarray, mode: str) -> Tuple[float, int, str]:
+    """Capacidad y número de vehículos según ``mode``:
 
-    Apunta a ~8 clientes por ruta, con ``cap >= demanda_máxima`` para no volver
-    infactible a ningún cliente individual."""
+    * ``"binding"`` (default): ``cap = max(dem_máx, ⌈total/k_target⌉)`` con
+      ~8 clientes por ruta y ``cap >= dem_máx`` (CVRP genuino → los cortes RCI del
+      Branch & Cut se separan). **No** comparable 1:1 con SVRPBench oficial.
+    * ``"official"``: ``cap = Σ demandas`` (no restrictiva), 1 vehículo — réplica
+      exacta del generador oficial (`vehicle_capacity = sum(demands)`); el problema
+      se reduce a mTSP con ventanas. Comparable con SVRPBench, pero la capacidad no
+      restringe."""
     total = float(demands.sum())
+    if mode == "official":
+        return total, 1, "official cap = sum(demandas) (no restrictiva)"
     max_d = float(demands.max())
     n_customers = int((demands > 0).sum()) or len(demands)
-    k_target = max(2, round(n_customers / 8))
+    k_target = max(2, math.ceil(n_customers / 8))
     cap = max(max_d, math.ceil(total / k_target))
     num_vehicles = max(1, math.ceil(total / cap))
-    return float(cap), int(num_vehicles)
+    return float(cap), int(num_vehicles), "binding cap = max(dem_máx, ceil(total/k_target))"
 
 
-def generate_instance(num_customers: int, *, seed: int) -> Instance:
+def generate_instance(num_customers: int, *, seed: int, capacity_mode: str = "binding") -> Instance:
     """Genera una instancia TWCVRP de depósito único, fiel a SVRPBench."""
     np.random.seed(seed)
     random.seed(seed)
@@ -92,7 +99,7 @@ def generate_instance(num_customers: int, *, seed: int) -> Instance:
         ctype = random.randint(0, 1)  # 0 residencial, 1 comercial
         time_windows[i] = sample_time_window(ctype, appear_times[i])
 
-    cap, num_vehicles = _binding_capacity(demands)
+    cap, num_vehicles, cap_note = _capacity(demands, capacity_mode)
 
     return Instance(
         locations=locations,
@@ -107,13 +114,14 @@ def generate_instance(num_customers: int, *, seed: int) -> Instance:
             "num_customers": num_customers,
             "depot_index": 0,
             "seed": seed,
-            "capacity_note": "binding cap = max(max_demand, ceil(total/k_target))",
+            "capacity_mode": capacity_mode,
+            "capacity_note": cap_note,
         },
     )
 
 
-def _npz_path(num_customers: int, n_instances: int, base_seed: int) -> Path:
-    return DATA_DIR / f"twcvrp_n{num_customers}_m{n_instances}_s{base_seed}.npz"
+def _npz_path(num_customers: int, n_instances: int, base_seed: int, capacity_mode: str) -> Path:
+    return DATA_DIR / f"twcvrp_n{num_customers}_m{n_instances}_s{base_seed}_{capacity_mode}.npz"
 
 
 def _save(insts: List[Instance], path: Path) -> None:
@@ -147,13 +155,14 @@ def _load(path: Path) -> List[Instance]:
 
 
 def load_size(num_customers: int, n_instances: int = 3, *, base_seed: int = 12345,
-              cache: bool = True) -> List[Instance]:
+              capacity_mode: str = "binding", cache: bool = True) -> List[Instance]:
     """Devuelve ``n_instances`` instancias de ``num_customers`` clientes,
     generándolas (y cacheándolas en .npz) si no existen."""
-    path = _npz_path(num_customers, n_instances, base_seed)
+    path = _npz_path(num_customers, n_instances, base_seed, capacity_mode)
     if cache and path.exists():
         return _load(path)
-    insts = [generate_instance(num_customers, seed=base_seed + 1000 * num_customers + k)
+    insts = [generate_instance(num_customers, seed=base_seed + 1000 * num_customers + k,
+                               capacity_mode=capacity_mode)
              for k in range(n_instances)]
     if cache:
         _save(insts, path)
@@ -161,10 +170,11 @@ def load_size(num_customers: int, n_instances: int = 3, *, base_seed: int = 1234
 
 
 def load_sizes(sizes: List[int], n_instances: int = 3, *, base_seed: int = 12345,
-               cache: bool = True) -> List[Tuple[int, Instance]]:
+               capacity_mode: str = "binding", cache: bool = True) -> List[Tuple[int, Instance]]:
     """Lista de ``(size, Instance)`` para varios tamaños."""
     out: List[Tuple[int, Instance]] = []
     for s in sizes:
-        for inst in load_size(s, n_instances, base_seed=base_seed, cache=cache):
+        for inst in load_size(s, n_instances, base_seed=base_seed,
+                              capacity_mode=capacity_mode, cache=cache):
             out.append((s, inst))
     return out

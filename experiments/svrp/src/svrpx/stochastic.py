@@ -1,40 +1,45 @@
 """Evaluador estocástico compartido para los 5 paradigmas.
 
-Fidelidad a SVRPBench (revisión v2):
+Fidelidad a SVRPBench (revisión v3):
 
   * **Primitivas idénticas**: el modelo de tiempo de viaje (congestión por mezcla
     gaussiana con picos 8:00/17:00, factor log-normal y accidentes de Poisson con
     pico a las 21:00) reproduce exactamente las fórmulas de
     ``travel_time_generator.py``. El factor aleatorio log-normal se expresa como
     ``exp(mu(t) + sigma(t)·Z)`` con ``Z ~ N(0,1)``, equivalente en distribución a
-    ``random.lognormvariate(mu, sigma)``.
+    ``random.lognormvariate(mu, sigma)``. Los accidentes suman **exactamente**
+    ``cnt`` duraciones Uniforme(30,120) i.i.d. (no una aproximación).
 
   * **Semántica de costo idéntica** a ``vrp_base._simulate_route_execution``:
     ``current_time`` crudo (sin módulo) para muestrear el siguiente tramo; en
     llegada temprana se espera (``current_time = inicio_ventana``); el costo
-    acumula **solo tiempo de viaje** (la espera se reporta aparte). Las violaciones
-    de ventana se cuentan en hora-del-día (``% 1440``), como en
+    acumula **solo tiempo de viaje**. Violaciones de ventana en hora-del-día
+    (``% 1440``) y de aparición (``current_time < appear``), como en
     ``vrp_base._check_feasibility``.
 
   * **Common Random Numbers (CRN) reales**: cada realización ``r`` pre-muestrea un
-    **escenario** ``ξ`` —ruido log-normal y accidentes por (arco, bucket horario)—
-    *independiente de la ruta*. Como el escenario se regenera de forma determinista
-    a partir de ``(seed, r)``, dos métodos cualesquiera evaluados sobre la misma
-    instancia ven **exactamente** el mismo ξ en la realización ``r``. Esto da CRN
-    entre los 5 paradigmas (varianza reducida; pruebas estadísticas válidas).
+    **escenario** ``ξ`` —ruido log-normal y demora total por accidentes por
+    (arco, bucket horario)— *independiente de la ruta* y determinista en
+    ``(seed, r)``. Dos métodos cualesquiera sobre la misma instancia ven el mismo ξ
+    en la realización ``r`` (CRN; varianza reducida; pruebas estadísticas válidas).
 
   * **Extensión sobre la base oficial**: recurso de 2ª etapa ``Q(ruta, ξ)``
-    (penalización por minutos de retraso al violar una ventana) y ``CVaR_alpha`` del
-    costo total ``c + Q`` (medida sensible al riesgo, anteproyecto §Metodología).
+    (penalización ``late_penalty`` por minuto de retraso al violar una ventana) y
+    ``CVaR_alpha`` del costo total ``c + Q``.
 
-Diferencia consciente con el evaluador oficial: SVRPBench muestrea el costo y la
-factibilidad con realizaciones **independientes**; aquí ambos se calculan sobre el
-**mismo** escenario ξ (más sólido y necesario para el CRN). Por tanto ``expected_cost``
-comparte la *semántica* del costo oficial pero no es bit-a-bit idéntico.
+  * **Control de cola** (``accident_scale``): multiplica la tasa de accidentes de
+    Poisson. Con el valor oficial (1.0) los accidentes son rarísimos (≈1e-4) y el
+    CVaR ≈ media; subirlo (p. ej. 20-50) hace que ξ produzca colas pesadas reales y
+    el CVaR/robustez discriminen. Default 1.0 (fiel a SVRPBench).
+
+Diferencia consciente con el evaluador oficial: SVRPBench muestrea costo y
+factibilidad con realizaciones independientes; aquí ambos usan el **mismo** ξ (más
+sólido y necesario para el CRN). ``expected_cost`` comparte la *semántica* del costo
+oficial pero no es bit-a-bit idéntico.
 
 Convención de rutas: ``routes`` es ``List[List[int]]`` con índices de cliente (sin el
 depósito en los extremos), igual que ``vrp_bench.core.Solution``. El depósito es el
-nodo 0; NO se infiere por ``demand == 0`` (algunos clientes legítimos tienen demanda 0).
+nodo 0; NO se infiere por ``demand == 0``.
 """
 from __future__ import annotations
 
@@ -66,60 +71,7 @@ def _rush(current_time: float) -> float:
 
 
 # --------------------------------------------------------------------------- #
-# Escenario pre-muestreado ξ (CRN). Ruido independiente de la ruta.
-# --------------------------------------------------------------------------- #
-
-
-@dataclass
-class Scenario:
-    z: np.ndarray          # (n, n, B) ~ N(0,1): ruido log-normal por (arco, bucket)
-    acc_count: np.ndarray  # (n, n, B): nº de accidentes (Poisson) por (arco, bucket)
-    acc_dur: np.ndarray    # (n, n, B): duración de accidente (Uniforme 30-120 min)
-    n_buckets: int
-
-
-def sample_scenario(n: int, base_seed: int, r: int, n_buckets: int = 24) -> Scenario:
-    """Pre-muestrea ξ para la realización ``r`` de forma determinista en ``(seed, r)``."""
-    rng = np.random.default_rng((base_seed * 1_000_003 + r) & 0x7FFFFFFFFFFFFFFF)
-    B = n_buckets
-    z = rng.standard_normal((n, n, B))
-    mids = (np.arange(B) + 0.5) * (_DAY / B)
-    rate = 0.05 * np.array([normal_distribution(m, 1260, 120) for m in mids])
-    rate = np.clip(rate, 0.0, None)
-    acc_count = rng.poisson(lam=np.broadcast_to(rate, (n, n, B)))
-    acc_dur = rng.uniform(30.0, 120.0, size=(n, n, B))
-    return Scenario(z=z, acc_count=acc_count, acc_dur=acc_dur, n_buckets=B)
-
-
-def _bucket(t: float, B: int) -> int:
-    return int((t % _DAY) // (_DAY / B))
-
-
-def scenario_travel_time(i: int, j: int, t: float, dist: np.ndarray, scen: Scenario) -> float:
-    """Tiempo de viaje muestreado bajo el escenario fijo ξ. Determinista en (i, j, t, ξ).
-
-    Reproduce ``calculate_delay`` / ``sample_travel_time`` (velocidad=1): partes
-    deterministas con ``t`` crudo; ruido log-normal vía ``exp(mu+sigma·Z)`` y
-    accidentes pre-muestreados."""
-    if i == j:
-        return 0.0
-    d = float(dist[i, j])
-    b = _bucket(t, scen.n_buckets)
-    distance_factor = 1.0 - math.exp(-d / 50.0)
-    base_delay = 0.25 * time_factor(t) * distance_factor
-    rush = _rush(t)
-    mu = 0.0 + 0.1 * rush
-    sigma = 0.3 + 0.2 * rush
-    rand_factor = math.exp(mu + sigma * float(scen.z[i, j, b]))
-    delay = base_delay * rand_factor
-    cnt = int(scen.acc_count[i, j, b])
-    if cnt > 0:
-        delay += cnt * float(scen.acc_dur[i, j, b])
-    return d / 1.0 + delay
-
-
-# --------------------------------------------------------------------------- #
-# Geometría
+# Geometría y tiempo nominal (determinista) — usado por los MIP exactos.
 # --------------------------------------------------------------------------- #
 
 
@@ -128,6 +80,83 @@ def euclidean_int_matrix(locations: np.ndarray) -> np.ndarray:
     locs = np.asarray(locations, dtype=np.float64)
     diff = locs[:, None, :] - locs[None, :, :]
     return np.sqrt((diff ** 2).sum(-1)).astype(int).astype(np.float64)
+
+
+def nominal_time_matrix(dist: np.ndarray, t_star: float) -> np.ndarray:
+    """Tiempo de viaje **nominal determinista** a una hora representativa ``t_star``:
+    ``τ_ij = d_ij + 0.25·time_factor(t_star)·(1 − e^{−d_ij/50})`` (velocidad=1,
+    factor log-normal en su mediana ≈ 1, sin accidentes). Es la parte conocida del
+    tiempo de viaje; los MIP exactos optimizan sobre ``τ`` (objetivo de tiempo de
+    viaje de SVRPBench) y propagan el horario MTZ con ``τ``, evitando un plan
+    optimista que ignore la congestión determinista."""
+    d = np.asarray(dist, dtype=np.float64)
+    base = 0.25 * time_factor(t_star) * (1.0 - np.exp(-d / 50.0))
+    tau = d + base
+    np.fill_diagonal(tau, 0.0)
+    return tau
+
+
+def representative_time(instance, depot: int = 0) -> float:
+    """Hora representativa de servicio = media de los centros de ventana de los
+    clientes (fallback: mediodía)."""
+    tw = getattr(instance, "time_windows", None)
+    if tw is None:
+        return 720.0
+    tw = np.asarray(tw, dtype=np.float64)
+    centers = [(tw[i, 0] + tw[i, 1]) / 2.0 for i in range(tw.shape[0]) if i != depot]
+    return float(np.mean(centers)) if centers else 720.0
+
+
+# --------------------------------------------------------------------------- #
+# Escenario pre-muestreado ξ (CRN). Ruido independiente de la ruta.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class Scenario:
+    z: np.ndarray          # (n, n, B) ~ N(0,1): ruido log-normal por (arco, bucket)
+    acc_delay: np.ndarray  # (n, n, B): demora TOTAL por accidentes (suma exacta de cnt Uniformes)
+    n_buckets: int
+
+
+def sample_scenario(n: int, base_seed: int, r: int, n_buckets: int = 24,
+                    accident_scale: float = 1.0) -> Scenario:
+    """Pre-muestrea ξ para la realización ``r``, determinista en ``(seed, r)``."""
+    rng = np.random.default_rng((base_seed * 1_000_003 + r) & 0x7FFFFFFFFFFFFFFF)
+    B = n_buckets
+    z = rng.standard_normal((n, n, B))
+
+    mids = (np.arange(B) + 0.5) * (_DAY / B)
+    rate = 0.05 * accident_scale * np.array([normal_distribution(m, 1260, 120) for m in mids])
+    rate = np.clip(rate, 0.0, None)
+    cnt = rng.poisson(lam=np.broadcast_to(rate, (n, n, B)))
+
+    acc_delay = np.zeros((n, n, B), dtype=np.float64)
+    mx = int(cnt.max())
+    if mx > 0:  # suma exacta de cnt duraciones i.i.d. Uniforme(30,120)
+        dur = rng.uniform(30.0, 120.0, size=(n, n, B, mx))
+        mask = np.arange(mx)[None, None, None, :] < cnt[..., None]
+        acc_delay = (dur * mask).sum(-1)
+    return Scenario(z=z, acc_delay=acc_delay, n_buckets=B)
+
+
+def _bucket(t: float, B: int) -> int:
+    return int((t % _DAY) // (_DAY / B))
+
+
+def scenario_travel_time(i: int, j: int, t: float, dist: np.ndarray, scen: Scenario) -> float:
+    """Tiempo de viaje muestreado bajo el escenario fijo ξ. Determinista en (i, j, t, ξ)."""
+    if i == j:
+        return 0.0
+    d = float(dist[i, j])
+    b = _bucket(t, scen.n_buckets)
+    base_delay = 0.25 * time_factor(t) * (1.0 - math.exp(-d / 50.0))
+    rush = _rush(t)
+    mu = 0.0 + 0.1 * rush
+    sigma = 0.3 + 0.2 * rush
+    delay = base_delay * math.exp(mu + sigma * float(scen.z[i, j, b]))
+    delay += float(scen.acc_delay[i, j, b])
+    return d / 1.0 + delay
 
 
 # --------------------------------------------------------------------------- #
@@ -158,7 +187,7 @@ def _simulate(
     scen: Scenario,
 ) -> ScenarioResult:
     total_cost = total_wait = total_recourse = 0.0
-    tw_violations = capacity_violations = 0
+    tw_violations = capacity_violations = appear_violations = 0
     visit: Dict[int, int] = {}
     served = 0
 
@@ -183,6 +212,7 @@ def _simulate(
             total_cost += travel
 
             if nxt in appear_times and ct < appear_times[nxt]:
+                appear_violations += 1  # llegar antes de que el cliente aparezca
                 total_wait += appear_times[nxt] - ct
                 ct = appear_times[nxt]
 
@@ -191,8 +221,7 @@ def _simulate(
                 if ct < start:  # espera por llegada temprana (semántica oficial, crudo)
                     total_wait += start - ct
                     ct = start
-                # violación + recurso de 2ª etapa (hora-del-día, semántica oficial)
-                t_norm = ct % _DAY
+                t_norm = ct % _DAY  # violación + recurso (hora-del-día, semántica oficial)
                 if t_norm > end:
                     tw_violations += 1
                     total_recourse += late_penalty * (t_norm - end)
@@ -200,7 +229,7 @@ def _simulate(
         if route_demand > cap * 1.001:
             capacity_violations += 1
 
-    violations = capacity_violations + tw_violations
+    violations = capacity_violations + tw_violations + appear_violations
     for _c, cnt in visit.items():
         if cnt > 1:
             violations += cnt - 1
@@ -256,6 +285,7 @@ def score_routes(
     seed: int = 0,
     alpha: float = 0.95,
     late_penalty: float = 1.0,
+    accident_scale: float = 1.0,
     depot: int = 0,
     n_buckets: int = 24,
 ) -> StochasticScore:
@@ -295,7 +325,7 @@ def score_routes(
     twv = np.empty(num_realizations)
 
     for r in range(num_realizations):
-        scen = sample_scenario(n, seed, r, n_buckets=n_buckets)
+        scen = sample_scenario(n, seed, r, n_buckets=n_buckets, accident_scale=accident_scale)
         res = _simulate(routes, depot, dist, demands, caps, tw, appear, customers,
                         late_penalty, scen)
         costs[r] = res.travel_cost

@@ -86,11 +86,31 @@ necesita la **licencia académica gratuita** de Gurobi:
   estadística válida). Nota: SVRPBench muestrea costo y factibilidad por separado; aquí
   ambos usan el mismo ξ (más sólido), así que `expected_cost` comparte la *semántica* del
   costo oficial pero no es bit-a-bit idéntico.
-- **Dos baselines exactos**: `exact-bc` (CVRP) **ignora** las ventanas en el MIP →
-  mide costo óptimo de distancia; `exact-bc-tw` (CVRPTW con MTZ y ventanas soft) **sí**
-  las respeta nominalmente. Comparar ambos **aísla** cuánta infactibilidad proviene de la
-  estocasticidad (ξ) y cuánta de ignorar las ventanas — evita atribuir a la incertidumbre
-  un efecto que en realidad es de modelado.
+- **Dos baselines exactos**: `exact-bc` (CVRP) **ignora** las ventanas en el MIP;
+  `exact-bc-tw` (CVRPTW con MTZ y ventanas soft) **sí** las respeta nominalmente.
+  Comparar ambos **aísla** cuánta infactibilidad proviene de la estocasticidad (ξ) y
+  cuánta de ignorar las ventanas.
+- **Objetivo = tiempo de viaje nominal** (no solo distancia): ambos MIP optimizan
+  `τ_ij = d_ij + retraso_de_congestión_determinista(t*)`, y el MTZ propaga el horario con
+  `τ`. Así el plan incorpora la congestión *conocida* y la infactibilidad residual bajo ξ
+  es atribuible a la incertidumbre, no a un horario subestimado. `det_cost` es entonces el
+  tiempo de viaje nominal (comparable con `E[c]`).
+- **Branch & Cut**: los cortes RCI/DFJ se separan en soluciones **enteras** (`MIPSOL`,
+  exacto) y **fraccionarias** (`MIPNODE`, heurística de componentes) para fortalecer la cota.
+
+## Perillas y salvedades
+
+- `--capacity-mode {binding|official}`: `binding` (default) hace un CVRP genuino donde los
+  cortes de capacidad sí actúan, pero **no** es comparable 1:1 con SVRPBench; `official`
+  replica `cap = Σ demandas` (no restrictiva), comparable pero capacidad inactiva.
+- `--accident-scale s`: multiplica la tasa de accidentes Poisson. Con `s=1` (oficial) los
+  accidentes son rarísimos (≈1e-4) y por eso **CVaR ≈ media**; subir `s` (p. ej. 20-50)
+  engruesa la cola para que el CVaR/robustez discriminen. La factibilidad estricta tiende a
+  0 a partir de n≈20 por la **escala** del benchmark (velocidad=1, distancias 0–1000 vs día
+  de 1440 min); el eje informativo es el **costo esperado/CVaR**, no la factibilidad.
+- **Pesos de recurso**: `late_penalty` (recurso Q, por minuto de retraso) y `tw_penalty`
+  (tardanza nominal en el MIP) valen 1.0 por defecto; `E[c+Q]` y CVaR escalan linealmente
+  con `late_penalty` (hiperparámetro de modelado, reportar sensibilidad si se varía).
 - **Instancias** (`io.py`): se reutilizan las primitivas oficiales
   `city.City.batch_sample` (ubicaciones) y `time_windows_generator.sample_time_window`
   (ventanas residencial/comercial). Para `num_cities = 1` (todos nuestros tamaños)

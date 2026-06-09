@@ -33,8 +33,8 @@ def _build_solver(name: str, args):
     if name in ("exact-bc", "exact-bc-tw"):
         kw = dict(time_limit=args.time_limit, mip_gap=args.mip_gap,
                   default_realizations=args.realizations, alpha=args.alpha,
-                  late_penalty=args.late_penalty, threads=args.threads,
-                  verbose=args.verbose)
+                  late_penalty=args.late_penalty, accident_scale=args.accident_scale,
+                  threads=args.threads, verbose=args.verbose)
         if name == "exact-bc-tw":
             kw["tw_penalty"] = args.tw_penalty
         return cls(**kw)
@@ -49,7 +49,8 @@ def run(args) -> pd.DataFrame:
     figdir.mkdir(parents=True, exist_ok=True)
     resdir.mkdir(parents=True, exist_ok=True)
 
-    instances = io.load_sizes(sizes, args.instances, base_seed=args.seed)
+    instances = io.load_sizes(sizes, args.instances, base_seed=args.seed,
+                              capacity_mode=args.capacity_mode)
     rows, per_instance = [], []
 
     for sname in solver_names:
@@ -123,6 +124,10 @@ def main() -> None:
     p.add_argument("--alpha", type=float, default=0.95)
     p.add_argument("--late-penalty", type=float, default=1.0, dest="late_penalty")
     p.add_argument("--tw-penalty", type=float, default=1.0, dest="tw_penalty")
+    p.add_argument("--accident-scale", type=float, default=1.0, dest="accident_scale",
+                   help="multiplica la tasa de accidentes Poisson (1=oficial; >1 engruesa la cola/CVaR)")
+    p.add_argument("--capacity-mode", default="binding", choices=["binding", "official"],
+                   dest="capacity_mode")
     p.add_argument("--threads", type=int, default=0)
     p.add_argument("--seed", type=int, default=12345)
     p.add_argument("--verbose", action="store_true")

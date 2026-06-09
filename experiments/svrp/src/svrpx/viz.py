@@ -199,10 +199,13 @@ def make_all(instance, solution, figdir: Path, *, solver: str, size: int,
     figdir.mkdir(parents=True, exist_ok=True)
     tag = f"{solver}_n{size}_i{instance_idx}"
     paths = []
+    gap = solution.extras.get("gap", float("nan"))
+    opt_tag = "óptima" if (np.isfinite(gap) and gap <= 1e-6) else \
+        (f"incumbente (gap={gap:.1%})" if np.isfinite(gap) else "incumbente")
     p1 = figdir / f"{tag}_routes.png"
     plot_routes(instance, solution, p1,
-                title=f"{solver} · n={size} · {solution.extras.get('n_routes', 0)} rutas "
-                      f"· det={solution.extras.get('det_cost', float('nan')):.0f}")
+                title=f"{solver} · n={size} · {solution.extras.get('n_routes', 0)} rutas · "
+                      f"{opt_tag} · det={solution.extras.get('det_cost', float('nan')):.0f}")
     p2 = figdir / f"{tag}_convergence.png"
     plot_convergence(solution, p2, title=f"Branch & Cut · n={size} · "
                      f"gap={solution.extras.get('gap', float('nan')):.2%}")
