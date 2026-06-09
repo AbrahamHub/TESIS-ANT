@@ -10,7 +10,7 @@ garantizar comparabilidad.
 
 | # | Paradigma | Estado | Solver |
 |---|-----------|--------|--------|
-| 1 | **Métodos Exactos (Branch & Cut)** | ✅ implementado | `exact-bc` (Gurobi) |
+| 1 | **Métodos Exactos (Branch & Cut)** | ✅ implementado | `exact-bc` (CVRP) · `exact-bc-tw` (CVRPTW) |
 | 2 | Metaheurísticas (ACO / Tabu) | ⏳ pendiente | — |
 | 3 | NCO (RL supervisado) | ⏳ pendiente | — |
 | 4 | NCO determinista (POMO / AM) | ⏳ pendiente | — |
@@ -48,13 +48,17 @@ git clone https://github.com/yehias21/svrpbench third_party/svrpbench
 ## Ejecutar (implementación 1: Branch & Cut)
 
 ```bash
+# Compara el baseline CVRP (ignora ventanas) vs CVRPTW (las respeta):
 PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
-    --solver exact-bc --sizes 10,20,50 --instances 3 --realizations 200 --time-limit 120
+    --solver exact-bc,exact-bc-tw --sizes 10,20,50 --instances 3 --realizations 200 --time-limit 120
 ```
 
-Genera `results/exact-bc_metrics.csv`, `results/exact-bc_per_instance.json`, y en
-`figures/` por tamaño: `*_routes.png`, `*_convergence.png`, `*_costhist.png`, más
-`exact-bc_metrics.png`.
+Genera `results/comparison_metrics.csv`, `results/comparison_per_instance.json`, y en
+`figures/` por tamaño y solver: `*_routes.png`, `*_convergence.png`, `*_costhist.png`,
+más `comparison_metrics.png` (barras agrupadas por tamaño).
+
+`exact-bc-tw` usa una formulación dirigida (~n² binarias); n=50 requiere licencia
+académica de Gurobi y el runner lo **salta** automáticamente si excede la licencia.
 
 ## Licencia de Gurobi
 
@@ -69,11 +73,24 @@ necesita la **licencia académica gratuita** de Gurobi:
 
 ## Notas de fidelidad a SVRPBench
 
-- **Modelo estocástico** (`stochastic.py`): réplica textual de
-  `travel_time_generator.py` (congestión por mezcla gaussiana con picos 8:00/17:00,
-  retardo log-normal, accidentes de Poisson con pico a las 21:00) y de la
-  simulación de ruta de `vrp_base.py`. Se evita así la cadena de imports pesada
-  `city → scikit-learn/PIL`.
+- **Modelo estocástico** (`stochastic.py`): las *primitivas* (congestión por mezcla
+  gaussiana con picos 8:00/17:00, factor log-normal, accidentes de Poisson con pico a
+  las 21:00) reproducen exactamente `travel_time_generator.py`. La *simulación de ruta*
+  comparte la **semántica de costo** de `vrp_base._simulate_route_execution`
+  (`current_time` crudo, espera por llegada temprana, el costo acumula solo tiempo de
+  viaje) y la **semántica de violación** de `_check_feasibility` (ventana en hora-del-día,
+  `% 1440`). Se evita la cadena de imports pesada `city → scikit-learn/PIL`.
+- **Common Random Numbers (CRN)**: cada realización pre-muestrea un escenario ξ (ruido
+  por arco×bucket horario) *independiente de la ruta* y determinista en `(seed, r)`, de
+  modo que los 5 paradigmas se evalúan sobre **escenarios idénticos** (comparación
+  estadística válida). Nota: SVRPBench muestrea costo y factibilidad por separado; aquí
+  ambos usan el mismo ξ (más sólido), así que `expected_cost` comparte la *semántica* del
+  costo oficial pero no es bit-a-bit idéntico.
+- **Dos baselines exactos**: `exact-bc` (CVRP) **ignora** las ventanas en el MIP →
+  mide costo óptimo de distancia; `exact-bc-tw` (CVRPTW con MTZ y ventanas soft) **sí**
+  las respeta nominalmente. Comparar ambos **aísla** cuánta infactibilidad proviene de la
+  estocasticidad (ξ) y cuánta de ignorar las ventanas — evita atribuir a la incertidumbre
+  un efecto que en realidad es de modelado.
 - **Instancias** (`io.py`): se reutilizan las primitivas oficiales
   `city.City.batch_sample` (ubicaciones) y `time_windows_generator.sample_time_window`
   (ventanas residencial/comercial). Para `num_cities = 1` (todos nuestros tamaños)

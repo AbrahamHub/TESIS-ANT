@@ -1,41 +1,53 @@
 """Evaluador estocástico compartido para los 5 paradigmas.
 
-El modelo de tiempo de viaje estocástico (congestión por mezcla gaussiana,
-retardo log-normal y accidentes de Poisson) y la simulación de ejecución de ruta
-se **replican textualmente** de SVRPBench para producir números idénticos sin
-arrastrar la cadena de imports pesada (``city`` -> ``scikit-learn`` + ``PIL``):
+Fidelidad a SVRPBench (revisión v2):
 
-  * ``third_party/svrpbench/vrp_bench/travel_time_generator.py``
-      -> normal_distribution, time_factor, random_factor, sample_accidents,
-         calculate_delay, sample_travel_time
-  * ``third_party/svrpbench/vrp_bench/vrp_base.py``
-      -> _simulate_route_execution, _check_feasibility
+  * **Primitivas idénticas**: el modelo de tiempo de viaje (congestión por mezcla
+    gaussiana con picos 8:00/17:00, factor log-normal y accidentes de Poisson con
+    pico a las 21:00) reproduce exactamente las fórmulas de
+    ``travel_time_generator.py``. El factor aleatorio log-normal se expresa como
+    ``exp(mu(t) + sigma(t)·Z)`` con ``Z ~ N(0,1)``, equivalente en distribución a
+    ``random.lognormvariate(mu, sigma)``.
 
-Se añade, sobre esa base oficial:
-  * recurso de 2ª etapa Q(ruta, ξ): penalización por minutos de retraso al violar
-    una ventana de tiempo (formulación de programación estocástica en dos etapas);
-  * CVaR_alpha del costo total c+Q (medida sensible al riesgo, anteproyecto §Metodología);
-  * tasa de factibilidad y robustez agregadas sobre múltiples realizaciones,
-    con semilla controlada para que todos los métodos vean los mismos escenarios.
+  * **Semántica de costo idéntica** a ``vrp_base._simulate_route_execution``:
+    ``current_time`` crudo (sin módulo) para muestrear el siguiente tramo; en
+    llegada temprana se espera (``current_time = inicio_ventana``); el costo
+    acumula **solo tiempo de viaje** (la espera se reporta aparte). Las violaciones
+    de ventana se cuentan en hora-del-día (``% 1440``), como en
+    ``vrp_base._check_feasibility``.
 
-Convención de rutas: ``routes`` es ``List[List[int]]`` con índices de cliente
-(sin el depósito en los extremos), igual que ``vrp_bench.core.Solution``. El
-depósito es el nodo 0 (instancias de depósito único generadas con depósito
-primero); NO se infiere por ``demand == 0`` porque algunos clientes legítimos
-pueden tener demanda 0 en SVRPBench.
+  * **Common Random Numbers (CRN) reales**: cada realización ``r`` pre-muestrea un
+    **escenario** ``ξ`` —ruido log-normal y accidentes por (arco, bucket horario)—
+    *independiente de la ruta*. Como el escenario se regenera de forma determinista
+    a partir de ``(seed, r)``, dos métodos cualesquiera evaluados sobre la misma
+    instancia ven **exactamente** el mismo ξ en la realización ``r``. Esto da CRN
+    entre los 5 paradigmas (varianza reducida; pruebas estadísticas válidas).
+
+  * **Extensión sobre la base oficial**: recurso de 2ª etapa ``Q(ruta, ξ)``
+    (penalización por minutos de retraso al violar una ventana) y ``CVaR_alpha`` del
+    costo total ``c + Q`` (medida sensible al riesgo, anteproyecto §Metodología).
+
+Diferencia consciente con el evaluador oficial: SVRPBench muestrea el costo y la
+factibilidad con realizaciones **independientes**; aquí ambos se calculan sobre el
+**mismo** escenario ξ (más sólido y necesario para el CRN). Por tanto ``expected_cost``
+comparte la *semántica* del costo oficial pero no es bit-a-bit idéntico.
+
+Convención de rutas: ``routes`` es ``List[List[int]]`` con índices de cliente (sin el
+depósito en los extremos), igual que ``vrp_bench.core.Solution``. El depósito es el
+nodo 0; NO se infiere por ``demand == 0`` (algunos clientes legítimos tienen demanda 0).
 """
 from __future__ import annotations
 
 import math
-import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 
+_DAY = 1440.0
+
 # --------------------------------------------------------------------------- #
-# Modelo de tiempo de viaje estocástico — copia textual de travel_time_generator.py
-# (SVRPBench). Sólo depende de math/random/numpy.
+# Partes deterministas del modelo (copia de travel_time_generator.py).
 # --------------------------------------------------------------------------- #
 
 
@@ -49,43 +61,61 @@ def time_factor(current_time: float) -> float:
     return 0.5 + 2 * (morning_peak + evening_peak)
 
 
-def random_factor(current_time: float) -> float:
-    rush_hour_effect = normal_distribution(current_time, 480, 90) + normal_distribution(current_time, 1020, 90)
-    mu = 0 + 0.1 * rush_hour_effect
-    sigma = 0.3 + 0.2 * rush_hour_effect
-    return random.lognormvariate(mu, sigma)
+def _rush(current_time: float) -> float:
+    return normal_distribution(current_time, 480, 90) + normal_distribution(current_time, 1020, 90)
 
 
-def sample_accidents(current_time: float) -> int:
-    accident_rate = 0.05 * normal_distribution(current_time, 1260, 120)  # pico a las 21:00
-    if accident_rate < 0:
-        accident_rate = 0
-    return np.random.poisson(lam=accident_rate)
+# --------------------------------------------------------------------------- #
+# Escenario pre-muestreado ξ (CRN). Ruido independiente de la ruta.
+# --------------------------------------------------------------------------- #
 
 
-def calculate_delay(distance: float, current_time: float) -> float:
-    time_fac = time_factor(current_time)
-    distance_factor = 1 - math.exp(-distance / 50)
-    base_delay = 0.25 * time_fac * distance_factor
-    rand_factor = random_factor(current_time)
-    delay = base_delay * rand_factor
-
-    num_accidents = sample_accidents(current_time)
-    accident_delay = 0
-    if num_accidents > 0:
-        durations = np.random.uniform(30, 120, size=num_accidents)
-        accident_delay = np.sum(durations)
-    delay += accident_delay
-    return delay
+@dataclass
+class Scenario:
+    z: np.ndarray          # (n, n, B) ~ N(0,1): ruido log-normal por (arco, bucket)
+    acc_count: np.ndarray  # (n, n, B): nº de accidentes (Poisson) por (arco, bucket)
+    acc_dur: np.ndarray    # (n, n, B): duración de accidente (Uniforme 30-120 min)
+    n_buckets: int
 
 
-def sample_travel_time(a: int, b: int, distances: Dict[Tuple[int, int], float],
-                       current_time: float, velocity: float = 1) -> float:
-    if a == b:
+def sample_scenario(n: int, base_seed: int, r: int, n_buckets: int = 24) -> Scenario:
+    """Pre-muestrea ξ para la realización ``r`` de forma determinista en ``(seed, r)``."""
+    rng = np.random.default_rng((base_seed * 1_000_003 + r) & 0x7FFFFFFFFFFFFFFF)
+    B = n_buckets
+    z = rng.standard_normal((n, n, B))
+    mids = (np.arange(B) + 0.5) * (_DAY / B)
+    rate = 0.05 * np.array([normal_distribution(m, 1260, 120) for m in mids])
+    rate = np.clip(rate, 0.0, None)
+    acc_count = rng.poisson(lam=np.broadcast_to(rate, (n, n, B)))
+    acc_dur = rng.uniform(30.0, 120.0, size=(n, n, B))
+    return Scenario(z=z, acc_count=acc_count, acc_dur=acc_dur, n_buckets=B)
+
+
+def _bucket(t: float, B: int) -> int:
+    return int((t % _DAY) // (_DAY / B))
+
+
+def scenario_travel_time(i: int, j: int, t: float, dist: np.ndarray, scen: Scenario) -> float:
+    """Tiempo de viaje muestreado bajo el escenario fijo ξ. Determinista en (i, j, t, ξ).
+
+    Reproduce ``calculate_delay`` / ``sample_travel_time`` (velocidad=1): partes
+    deterministas con ``t`` crudo; ruido log-normal vía ``exp(mu+sigma·Z)`` y
+    accidentes pre-muestreados."""
+    if i == j:
         return 0.0
-    distance = distances[(a, b)]
-    delay = calculate_delay(distance, current_time)
-    return distance / velocity + delay
+    d = float(dist[i, j])
+    b = _bucket(t, scen.n_buckets)
+    distance_factor = 1.0 - math.exp(-d / 50.0)
+    base_delay = 0.25 * time_factor(t) * distance_factor
+    rush = _rush(t)
+    mu = 0.0 + 0.1 * rush
+    sigma = 0.3 + 0.2 * rush
+    rand_factor = math.exp(mu + sigma * float(scen.z[i, j, b]))
+    delay = base_delay * rand_factor
+    cnt = int(scen.acc_count[i, j, b])
+    if cnt > 0:
+        delay += cnt * float(scen.acc_dur[i, j, b])
+    return d / 1.0 + delay
 
 
 # --------------------------------------------------------------------------- #
@@ -94,112 +124,90 @@ def sample_travel_time(a: int, b: int, distances: Dict[Tuple[int, int], float],
 
 
 def euclidean_int_matrix(locations: np.ndarray) -> np.ndarray:
-    """Matriz de distancias euclidianas **enteras** (como ``city.Location.distance``,
-    que hace ``np.linalg.norm(...).astype(int)``). Es la métrica determinista que
-    usan tanto el MIP exacto como la simulación estocástica."""
+    """Distancias euclidianas **enteras** (como ``city.Location.distance``)."""
     locs = np.asarray(locations, dtype=np.float64)
     diff = locs[:, None, :] - locs[None, :, :]
-    d = np.sqrt((diff ** 2).sum(-1))
-    return d.astype(int).astype(np.float64)
-
-
-def distances_dict(dist_matrix: np.ndarray) -> Dict[Tuple[int, int], float]:
-    n = dist_matrix.shape[0]
-    return {(i, j): float(dist_matrix[i, j]) for i in range(n) for j in range(n)}
+    return np.sqrt((diff ** 2).sum(-1)).astype(int).astype(np.float64)
 
 
 # --------------------------------------------------------------------------- #
-# Simulación de ejecución de ruta (replica vrp_base._simulate_route_execution /
-# _check_feasibility, extendida con recurso de 2ª etapa y conteo de retrasos).
+# Simulación de una realización (semántica oficial de costo + recurso de 2ª etapa).
 # --------------------------------------------------------------------------- #
 
 
 @dataclass
 class ScenarioResult:
-    travel_cost: float          # tiempo total de viaje (costo c, comparable con SVRPBench)
-    waiting: float              # tiempo de espera por ventanas/aparición
-    recourse: float             # Q(ruta, ξ): penalización por retrasos (2ª etapa)
-    tw_violations: int          # número de ventanas de tiempo violadas
-    feasible: bool              # 1 si sin violaciones (capacidad+TW+duplicados+no servidos)
-    violations: int             # total de violaciones (para CVR)
+    travel_cost: float
+    waiting: float
+    recourse: float
+    tw_violations: int
+    feasible: bool
+    violations: int
 
 
-def _simulate_one_scenario(
+def _simulate(
     routes: Sequence[Sequence[int]],
     depot: int,
-    distances: Dict[Tuple[int, int], float],
+    dist: np.ndarray,
     demands: np.ndarray,
     capacities: Sequence[float],
     time_windows: Dict[int, Tuple[float, float]],
     appear_times: Dict[int, float],
     customers: set,
     late_penalty: float,
+    scen: Scenario,
 ) -> ScenarioResult:
-    """Una realización estocástica: recorre cada ruta con tiempos de viaje
-    muestreados y acumula costo, espera, recurso y violaciones."""
-    total_cost = 0.0
-    total_wait = 0.0
-    total_recourse = 0.0
-    tw_violations = 0
-    capacity_violations = 0
-    appear_violations = 0
-    visit_count: Dict[int, int] = {}
+    total_cost = total_wait = total_recourse = 0.0
+    tw_violations = capacity_violations = 0
+    visit: Dict[int, int] = {}
     served = 0
 
     for r_idx, raw in enumerate(routes):
-        # Acotar la ruta con el depósito en ambos extremos.
         route = [depot] + [int(c) for c in raw] + [depot]
         if len(route) <= 2:
             continue
         cap = capacities[r_idx] if r_idx < len(capacities) else capacities[0]
         route_demand = 0.0
-        current_time = 0.0
+        ct = 0.0  # current_time crudo (semántica oficial de costo)
 
-        for i in range(len(route) - 1):
-            cur, nxt = route[i], route[i + 1]
+        for k in range(len(route) - 1):
+            cur, nxt = route[k], route[k + 1]
             if nxt in customers:
                 served += 1
-                visit_count[nxt] = visit_count.get(nxt, 0) + 1
+                visit[nxt] = visit.get(nxt, 0) + 1
                 if nxt < len(demands):
                     route_demand += float(demands[nxt])
 
-            travel = sample_travel_time(cur, nxt, distances, current_time)
-            current_time += travel
+            travel = scenario_travel_time(cur, nxt, ct, dist, scen)
+            ct += travel
             total_cost += travel
 
-            # Aparición dinámica del cliente (espera si llega antes).
-            if nxt in appear_times and current_time < appear_times[nxt]:
-                total_wait += appear_times[nxt] - current_time
-                current_time = appear_times[nxt]
+            if nxt in appear_times and ct < appear_times[nxt]:
+                total_wait += appear_times[nxt] - ct
+                ct = appear_times[nxt]
 
-            # Ventana de tiempo (recurso de 2ª etapa al violar el cierre).
             if nxt in time_windows and nxt != depot:
                 start, end = time_windows[nxt]
-                t_norm = current_time % 1440  # semántica oficial de SVRPBench
+                if ct < start:  # espera por llegada temprana (semántica oficial, crudo)
+                    total_wait += start - ct
+                    ct = start
+                # violación + recurso de 2ª etapa (hora-del-día, semántica oficial)
+                t_norm = ct % _DAY
                 if t_norm > end:
                     tw_violations += 1
                     total_recourse += late_penalty * (t_norm - end)
-                elif t_norm < start:
-                    total_wait += start - t_norm
-                    current_time += start - t_norm
 
         if route_demand > cap * 1.001:
             capacity_violations += 1
 
-    violations = capacity_violations + tw_violations + appear_violations
-    for _c, cnt in visit_count.items():
+    violations = capacity_violations + tw_violations
+    for _c, cnt in visit.items():
         if cnt > 1:
             violations += cnt - 1
     violations += max(0, len(customers) - served)
 
-    return ScenarioResult(
-        travel_cost=total_cost,
-        waiting=total_wait,
-        recourse=total_recourse,
-        tw_violations=tw_violations,
-        feasible=(violations == 0),
-        violations=violations,
-    )
+    return ScenarioResult(total_cost, total_wait, total_recourse, tw_violations,
+                          violations == 0, violations)
 
 
 # --------------------------------------------------------------------------- #
@@ -218,14 +226,14 @@ def cvar(samples: np.ndarray, alpha: float = 0.95) -> float:
 
 @dataclass
 class StochasticScore:
-    expected_cost: float          # E[c] tiempo de viaje (comparable SVRPBench)
-    expected_total: float         # E[c + Q] costo con recurso
+    expected_cost: float          # E[c]  tiempo de viaje (semántica SVRPBench)
+    expected_total: float         # E[c + Q]  costo con recurso de 2ª etapa
     cvar: float                   # CVaR_alpha(c + Q)
     feasibility: float            # tasa de factibilidad en [0, 1]
     cvr: float                    # tasa de violación de restricciones (%)
     waiting_time: float
     robustness: float             # desviación estándar de c entre realizaciones
-    tw_violations: float          # promedio de violaciones de ventana
+    tw_violations: float
     alpha: float
     cost_samples: np.ndarray = field(repr=False, default=None)
     total_samples: np.ndarray = field(repr=False, default=None)
@@ -249,15 +257,15 @@ def score_routes(
     alpha: float = 0.95,
     late_penalty: float = 1.0,
     depot: int = 0,
+    n_buckets: int = 24,
 ) -> StochasticScore:
-    """Puntúa rutas (índices de cliente, sin depósito) sobre ``num_realizations``
-    escenarios estocásticos. Semilla fija por instancia => todos los métodos ven
-    los mismos escenarios (comparabilidad)."""
+    """Puntúa rutas sobre ``num_realizations`` escenarios pre-muestreados (CRN).
+    Para una misma instancia (mismo ``seed``) todos los métodos ven escenarios
+    idénticos, independientemente de sus rutas."""
     locations = np.asarray(instance.locations, dtype=np.float64)
     demands = np.asarray(instance.demands, dtype=np.float64)
     n = locations.shape[0]
     dist = euclidean_int_matrix(locations)
-    dd = distances_dict(dist)
 
     caps = list(np.asarray(instance.vehicle_capacities, dtype=np.float64).ravel())
     if not caps:
@@ -277,6 +285,7 @@ def score_routes(
                 appear[i] = float(ap[i])
 
     customers = set(range(n)) - {depot}
+    n_customers = max(1, len(customers))
 
     costs = np.empty(num_realizations)
     totals = np.empty(num_realizations)
@@ -285,14 +294,10 @@ def score_routes(
     cvrs = np.empty(num_realizations)
     twv = np.empty(num_realizations)
 
-    n_customers = max(1, len(customers))
     for r in range(num_realizations):
-        s = (seed * 100003 + r) & 0x7FFFFFFF
-        random.seed(s)
-        np.random.seed(s)
-        res = _simulate_one_scenario(
-            routes, depot, dd, demands, caps, tw, appear, customers, late_penalty
-        )
+        scen = sample_scenario(n, seed, r, n_buckets=n_buckets)
+        res = _simulate(routes, depot, dist, demands, caps, tw, appear, customers,
+                        late_penalty, scen)
         costs[r] = res.travel_cost
         totals[r] = res.travel_cost + res.recourse
         waits[r] = res.waiting

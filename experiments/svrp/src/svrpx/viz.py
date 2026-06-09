@@ -162,6 +162,38 @@ def plot_metrics_bars(df, path: Path, *, solver: str = "exact-bc") -> None:
     plt.close(fig)
 
 
+def plot_metrics_comparison(df, path: Path) -> None:
+    """Barras agrupadas por tamaño comparando varios solvers."""
+    solvers = list(df["solver"].unique())
+    sizes = sorted(df["size"].unique())
+    panels = [
+        ("expected_cost", "Costo esperado E[c]"),
+        ("feasibility", "Tasa de factibilidad"),
+        ("cvar", "CVaR (c+Q)"),
+        ("expected_total", "Costo total E[c+Q]"),
+    ]
+    fig, axes = plt.subplots(1, 4, figsize=(16, 3.9))
+    width = 0.8 / max(1, len(solvers))
+    xpos = np.arange(len(sizes))
+    for ax, (col, label) in zip(axes, panels):
+        for s_idx, sv in enumerate(solvers):
+            sub = df[df["solver"] == sv].groupby("size")[col].mean()
+            vals = [sub.get(sz, np.nan) for sz in sizes]
+            ax.bar(xpos + s_idx * width, vals, width, label=sv,
+                   color=_ROUTE_COLORS[s_idx % len(_ROUTE_COLORS)], alpha=0.85)
+        ax.set_title(label, fontsize=10)
+        ax.set_xticks(xpos + width * (len(solvers) - 1) / 2)
+        ax.set_xticklabels([str(s) for s in sizes])
+        ax.set_xlabel("Clientes")
+        if col == "feasibility":
+            ax.set_ylim(0, 1)
+    axes[0].legend(fontsize=8, loc="upper left")
+    fig.suptitle("Comparación de baselines exactos", fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+
+
 def make_all(instance, solution, figdir: Path, *, solver: str, size: int,
              instance_idx: int, alpha: float = 0.95) -> List[Path]:
     figdir.mkdir(parents=True, exist_ok=True)
