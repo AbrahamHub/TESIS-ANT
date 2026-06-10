@@ -31,7 +31,8 @@ from . import solvers  # noqa: F401  (registra exact-bc, exact-bc-tw, aco, tabu)
 def _build_meta_solver(name, args):
     cls = get_solver(name)
     return cls(default_realizations=args.realizations, alpha=args.alpha,
-               late_penalty=args.late_penalty, accident_scale=args.accident_scale)
+               late_penalty=args.late_penalty, accident_scale=args.accident_scale,
+               n_seeds=args.meta_seeds)
 
 
 def _build_solver(name: str, args):
@@ -138,6 +139,8 @@ def main() -> None:
                    help="multiplica la tasa de accidentes Poisson (1=oficial; >1 engruesa la cola/CVaR)")
     p.add_argument("--capacity-mode", default="binding", choices=["binding", "official"],
                    dest="capacity_mode")
+    p.add_argument("--meta-seeds", type=int, default=3, dest="meta_seeds",
+                   help="semillas por instancia para las metaheurísticas (media±desv)")
     p.add_argument("--threads", type=int, default=0)
     p.add_argument("--seed", type=int, default=12345)
     p.add_argument("--verbose", action="store_true")

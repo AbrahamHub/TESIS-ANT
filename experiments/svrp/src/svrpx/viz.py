@@ -168,11 +168,12 @@ def plot_metrics_comparison(df, path: Path) -> None:
     sizes = sorted(df["size"].unique())
     panels = [
         ("expected_cost", "Costo esperado E[c]"),
+        ("expected_total", "Costo total E[c+Q]"),
         ("feasibility", "Tasa de factibilidad"),
         ("cvar", "CVaR (c+Q)"),
-        ("expected_total", "Costo total E[c+Q]"),
+        ("n_vehicles", "N.º de vehículos/rutas"),
     ]
-    fig, axes = plt.subplots(1, 4, figsize=(16, 3.9))
+    fig, axes = plt.subplots(1, 5, figsize=(19, 3.9))
     width = 0.8 / max(1, len(solvers))
     xpos = np.arange(len(sizes))
     for ax, (col, label) in zip(axes, panels):
