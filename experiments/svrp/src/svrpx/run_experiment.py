@@ -47,6 +47,9 @@ def _build_solver(name: str, args):
         return cls(**kw)
     if name in ("aco", "tabu"):
         return _build_meta_solver(name, args)
+    if name == "nco-sl":
+        return cls(default_realizations=args.realizations, alpha=args.alpha,
+                   late_penalty=args.late_penalty, accident_scale=args.accident_scale)
     return cls()
 
 

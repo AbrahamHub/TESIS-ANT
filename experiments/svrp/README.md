@@ -12,7 +12,7 @@ garantizar comparabilidad.
 |---|-----------|--------|--------|---------|
 | 1 | **Métodos Exactos (Branch & Cut)** | ✅ implementado | `exact-bc` (CVRP) · `exact-bc-tw` (CVRPTW) | `*/01_exact/` |
 | 2 | **Metaheurísticas (ACO / Tabu)** | ✅ implementado | `aco` · `tabu` (oficiales, re-puntuados con CRN) | `*/02_metaheuristic/` |
-| 3 | NCO (RL supervisado) | ⏳ pendiente | — | `*/03_nco_supervised/` |
+| 3 | **NCO (supervisado)** | ✅ implementado | `nco-sl` (Pointer Network, imita a exact-bc) | `*/03_nco_supervised/` |
 | 4 | NCO determinista (POMO / AM) | ⏳ pendiente | — | `*/04_nco_pomo_am/` |
 | 5 | **EHBG-FACS** (propuesta) | ⏳ pendiente | — | `*/05_ehbg_facs/` |
 
@@ -36,8 +36,9 @@ experiments/svrp/
       exact_bc.py        # 1/5 Branch & Cut CVRP (Gurobi)
       exact_bc_tw.py     # 1/5 Branch & Cut CVRPTW (Gurobi, MTZ + ventanas soft)
       metaheuristic.py   # 2/5 ACO y Tabu (oficiales) re-puntuados con CRN
+      nco_sl.py          # 3/5 Pointer Network supervisada (PyTorch), imita a exact-bc
   third_party/svrpbench/ # repo oficial clonado (no versionado)
-  data/                  # instancias .npz cacheadas (no versionado)
+  data/                  # instancias .npz + modelos NCO cacheados (no versionado)
   results/
     01_exact/  02_metaheuristic/  ...  cross/    # CSV + JSON por paradigma (no versionado)
   figures/
@@ -51,6 +52,7 @@ cd experiments/svrp
 python3 -m venv .venv
 .venv/bin/python -m pip install -U pip
 .venv/bin/python -m pip install numpy scipy matplotlib pandas gurobipy scikit-learn pillow tqdm
+.venv/bin/python -m pip install torch          # solo para el paradigma 3 (NCO supervisado)
 # Paquete oficial SVRPBench (se usa vía PYTHONPATH, no se instala con pip):
 git clone https://github.com/yehias21/svrpbench third_party/svrpbench
 ```
@@ -66,10 +68,20 @@ PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
 PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
     --solver aco,tabu --sizes 10,20,50 --instances 3 --realizations 200
 
+# Paradigma 3 — NCO supervisado (Pointer Network; entrena/cachea en el 1.er uso):
+PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
+    --solver nco-sl --sizes 10,20,50 --instances 3 --realizations 200
+
 # Comparación entre paradigmas (escribe en cross/):
 PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
-    --solver exact-bc,aco,tabu --sizes 10,20 --instances 3 --realizations 200
+    --solver exact-bc,aco,tabu,nco-sl --sizes 10,20 --instances 3 --realizations 200
 ```
+
+El paradigma 3 requiere **PyTorch** (`pip install torch`). `nco-sl` entrena una Pointer
+Network imitando las rutas óptimas de `exact-bc` sobre instancias de n=20 (etiquetas
+caras), la cachea en `data/models/`, y luego hace **inferencia en milisegundos**. Su
+calidad es casi óptima en el tamaño de entrenamiento y se degrada fuera de distribución
+(n=50) — la limitación clásica del NCO supervisado que motivó el paso al RL (paradigma 4).
 
 Cada run genera `results/<NN_slug>/comparison_metrics.csv` + `.json`, y en
 `figures/<NN_slug>/` por tamaño y solver: `*_routes.png`, `*_costhist.png`,
