@@ -139,8 +139,8 @@ def main() -> None:
                    help="multiplica la tasa de accidentes Poisson (1=oficial; >1 engruesa la cola/CVaR)")
     p.add_argument("--capacity-mode", default="binding", choices=["binding", "official"],
                    dest="capacity_mode")
-    p.add_argument("--meta-seeds", type=int, default=3, dest="meta_seeds",
-                   help="semillas por instancia para las metaheurísticas (media±desv)")
+    p.add_argument("--meta-seeds", type=int, default=5, dest="meta_seeds",
+                   help="semillas por instancia para las metaheurísticas (best-of-K + seed_std)")
     p.add_argument("--threads", type=int, default=0)
     p.add_argument("--seed", type=int, default=12345)
     p.add_argument("--verbose", action="store_true")

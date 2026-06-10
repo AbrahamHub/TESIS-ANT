@@ -10,13 +10,27 @@ Correcciones de la revisión de la implementación 2:
 
   * **R1 — Reproducibilidad.** Los solvers heredados muestrean con ``random`` y
     ``np.random`` (vía ``sample_travel_time``) durante la construcción/búsqueda, así
-    que su ruta varía entre corridas. Aquí se **siembra el RNG** de forma determinista
-    por instancia, y se ejecutan **``n_seeds`` semillas** para caracterizar la
-    naturaleza estocástica del método: se reportan promedios entre semillas y la
-    desviación entre semillas (``seed_std_*`` en ``extras``); la ruta representativa
-    (la de menor ``E[c+Q]``) se usa para las figuras. El CRN de puntuación usa la
-    semilla de la **instancia** (no la del algoritmo), de modo que todas las rutas se
-    evalúan sobre los mismos escenarios ξ.
+    que su ruta varía entre corridas. Aquí se **siembra el RNG e instancia el solver
+    DESPUÉS de sembrar**, dentro del bucle, de modo que el resultado queda totalmente
+    determinado por ``(instancia, semilla)`` —independiente del orden de ejecución
+    entre solvers—. El CRN de puntuación usa la semilla de la **instancia** (no la del
+    algoritmo), de modo que todas las rutas se evalúan sobre los mismos escenarios ξ.
+
+  * **M1 — Agregación coherente (best-of-K).** Se ejecutan ``n_seeds`` semillas y se
+    reporta TODO (métricas y ruta) de la **misma** corrida elegida: la de menor
+    ``E[c+Q]`` (convención multistart estándar). ``seed_std_cost``/``seed_std_feasibility``
+    documentan la variabilidad entre semillas. Así la figura de ruta, las barras y la
+    tabla se refieren a la misma solución.
+
+  * **M3** — ``n_seeds=5`` por defecto; para afirmaciones estadísticas formales conviene
+    10–30 semillas (tradeoff de cómputo).
+
+  * **M4** — el determinismo asume que los solvers heredados usan los RNG **globales**
+    ``random``/``np.random`` (verificado empíricamente); un RNG propio
+    (``np.random.default_rng``/``random.Random``) no quedaría controlado.
+
+  * **M5** — los baselines NO están sintonizados (defaults razonables, no Optuna); para
+    una comparación final justa conviene tunearlos o declarar esta limitación.
 
   * **R2 — Hiperparámetros expuestos.** ``num_ants``/``max_iterations`` (ACO) y
     ``max_iterations``/``tabu_tenure`` (Tabu) son parámetros del wrapper (los oficiales
@@ -39,7 +53,7 @@ from __future__ import annotations
 
 import random
 import time
-from statistics import mean, pstdev
+from statistics import pstdev
 from typing import List, Type
 
 import numpy as np
@@ -78,7 +92,7 @@ class _LegacyMetaheuristic(Solver):
         alpha: float = 0.95,
         late_penalty: float = 1.0,
         accident_scale: float = 1.0,
-        n_seeds: int = 3,
+        n_seeds: int = 5,
     ):
         self.default_realizations = default_realizations
         self.alpha = alpha
@@ -103,8 +117,7 @@ class _LegacyMetaheuristic(Solver):
         R = num_realizations if num_realizations and num_realizations > 1 else self.default_realizations
 
         legacy_dict = instance.to_legacy_dict()
-        runs = []  # (score, routes, runtime)
-        res = None
+        runs = []  # (score, routes, runtime, legacy_cost)
         for k in range(self.n_seeds):
             s = (base_seed * 7919 + k * 104729) & 0x7FFFFFFF
             random.seed(s)
@@ -122,36 +135,33 @@ class _LegacyMetaheuristic(Solver):
                 instance, routes, num_realizations=R, seed=base_seed, alpha=self.alpha,
                 late_penalty=self.late_penalty, accident_scale=self.accident_scale, depot=depot,
             )
-            runs.append((score, routes, rt))
+            runs.append((score, routes, rt, float(res.get("total_cost", float("nan")))))
 
-        # Ruta representativa = la de menor costo total esperado (mejor de n_seeds).
-        best_score, best_routes, _ = min(runs, key=lambda x: x[0].expected_total)
-        ec = [r[0].expected_cost for r in runs]
-        et = [r[0].expected_total for r in runs]
+        # Convención **best-of-K** (multistart): TODAS las métricas reportadas y la ruta
+        # provienen de la MISMA corrida elegida (la de menor E[c+Q]); ``seed_std_*``
+        # documenta la variabilidad entre semillas. Así la figura de ruta y las barras
+        # se refieren a la misma solución (coherencia interna).
+        best = min(runs, key=lambda r: r[0].expected_total)
+        best_score, best_routes, _, best_legacy = best
+        ec = [r[0].expected_cost for r in runs]   # solo para la dispersión entre semillas
         fe = [r[0].feasibility for r in runs]
-        cv = [r[0].cvr for r in runs]
-        cvar = [r[0].cvar for r in runs]
-        nveh = [len(r[1]) for r in runs]
 
-        extras = best_score.as_extras()
+        extras = best_score.as_extras()  # expected_cost/expected_total/cvar/... de la mejor
         extras.update({
-            "expected_cost": mean(ec),
-            "expected_total": mean(et),
-            "cvar": mean(cvar),
             "seed_std_cost": pstdev(ec) if len(ec) > 1 else 0.0,
             "seed_std_feasibility": pstdev(fe) if len(fe) > 1 else 0.0,
             "n_seeds": self.n_seeds,
-            "n_routes": int(round(mean(nveh))),
-            "best_expected_total": best_score.expected_total,
-            "legacy_cost": float(res.get("total_cost", float("nan"))),
+            "n_routes": len(best_routes),
+            "legacy_cost": best_legacy,
             "realizations": R,
+            "aggregation": "best-of-K (mín E[c+Q])",
         })
         return Solution(
             routes=best_routes,
-            total_cost=mean(ec),
+            total_cost=best_score.expected_cost,
             runtime=sum(r[2] for r in runs),
-            feasibility=mean(fe),
-            cvr=mean(cv),
+            feasibility=best_score.feasibility,
+            cvr=best_score.cvr,
             waiting_time=best_score.waiting_time,
             robustness=best_score.robustness,
             extras=extras,
