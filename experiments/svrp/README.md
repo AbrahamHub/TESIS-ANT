@@ -8,30 +8,40 @@ Cada paradigma se implementa como un *solver* que produce rutas; **todas** las
 rutas se puntúan con el mismo evaluador estocástico (`svrpx/stochastic.py`) para
 garantizar comparabilidad.
 
-| # | Paradigma | Estado | Solver |
-|---|-----------|--------|--------|
-| 1 | **Métodos Exactos (Branch & Cut)** | ✅ implementado | `exact-bc` (CVRP) · `exact-bc-tw` (CVRPTW) |
-| 2 | Metaheurísticas (ACO / Tabu) | ⏳ pendiente | — |
-| 3 | NCO (RL supervisado) | ⏳ pendiente | — |
-| 4 | NCO determinista (POMO / AM) | ⏳ pendiente | — |
-| 5 | **EHBG-FACS** (propuesta) | ⏳ pendiente | — |
+| # | Paradigma | Estado | Solver | Salidas |
+|---|-----------|--------|--------|---------|
+| 1 | **Métodos Exactos (Branch & Cut)** | ✅ implementado | `exact-bc` (CVRP) · `exact-bc-tw` (CVRPTW) | `*/01_exact/` |
+| 2 | **Metaheurísticas (ACO / Tabu)** | ✅ implementado | `aco` · `tabu` (oficiales, re-puntuados con CRN) | `*/02_metaheuristic/` |
+| 3 | NCO (RL supervisado) | ⏳ pendiente | — | `*/03_nco_supervised/` |
+| 4 | NCO determinista (POMO / AM) | ⏳ pendiente | — | `*/04_nco_pomo_am/` |
+| 5 | **EHBG-FACS** (propuesta) | ⏳ pendiente | — | `*/05_ehbg_facs/` |
+
+Las salidas se organizan por paradigma: `results/<NN_slug>/` y `figures/<NN_slug>/`
+(p. ej. `01_exact`, `02_metaheuristic`). Un run que mezcle paradigmas escribe en
+`*/cross/`. El mapa solver→carpeta vive en `svrpx/paradigms.py`.
 
 ## Estructura
 
 ```
 experiments/svrp/
   src/svrpx/
-    _bootstrap.py     # pone el paquete oficial vrp_bench en el sys.path
-    stochastic.py     # evaluador estocástico compartido (4 vectores + recurso + CVaR)
-    metrics.py        # agregación y tablas de métricas
-    io.py             # generación/carga de instancias TWCVRP oficiales (depósito único)
-    solvers/exact_bc.py  # Branch & Cut (Gurobi)  <-- implementación 1/5
-    viz.py            # 4 figuras (ruta, convergencia, histograma+CVaR, barras)
-    run_experiment.py # runner CLI
-  third_party/svrpbench/   # repo oficial clonado (no versionado)
-  data/                    # instancias .npz cacheadas (no versionado)
-  results/                 # CSV + JSON de métricas (no versionado)
-  figures/                 # PNG para la tesis (versionado)
+    _bootstrap.py        # pone el paquete oficial vrp_bench en el sys.path
+    stochastic.py        # evaluador estocástico compartido (CRN + recurso + CVaR)
+    metrics.py           # agregación y tablas de métricas
+    io.py                # generación/carga de instancias TWCVRP (depósito único)
+    paradigms.py         # mapa solver -> paradigma/carpeta de salida
+    viz.py               # figuras (ruta, convergencia, histograma+CVaR, barras)
+    run_experiment.py    # runner CLI (escribe a results/<NN_slug>/ y figures/<NN_slug>/)
+    solvers/
+      exact_bc.py        # 1/5 Branch & Cut CVRP (Gurobi)
+      exact_bc_tw.py     # 1/5 Branch & Cut CVRPTW (Gurobi, MTZ + ventanas soft)
+      metaheuristic.py   # 2/5 ACO y Tabu (oficiales) re-puntuados con CRN
+  third_party/svrpbench/ # repo oficial clonado (no versionado)
+  data/                  # instancias .npz cacheadas (no versionado)
+  results/
+    01_exact/  02_metaheuristic/  ...  cross/    # CSV + JSON por paradigma (no versionado)
+  figures/
+    01_exact/  02_metaheuristic/  ...  cross/    # PNG por paradigma (versionado)
 ```
 
 ## Instalación (Apple Silicon / Python 3.13)
@@ -45,17 +55,25 @@ python3 -m venv .venv
 git clone https://github.com/yehias21/svrpbench third_party/svrpbench
 ```
 
-## Ejecutar (implementación 1: Branch & Cut)
+## Ejecutar
 
 ```bash
-# Compara el baseline CVRP (ignora ventanas) vs CVRPTW (las respeta):
+# Paradigma 1 — Métodos Exactos (CVRP que ignora ventanas vs CVRPTW que las respeta):
 PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
-    --solver exact-bc,exact-bc-tw --sizes 10,20,50 --instances 3 --realizations 200 --time-limit 120
+    --solver exact-bc,exact-bc-tw --sizes 10,20,50 --instances 3 --realizations 200 --time-limit 90
+
+# Paradigma 2 — Metaheurísticas (ACO vs Tabu):
+PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
+    --solver aco,tabu --sizes 10,20,50 --instances 3 --realizations 200
+
+# Comparación entre paradigmas (escribe en cross/):
+PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
+    --solver exact-bc,aco,tabu --sizes 10,20 --instances 3 --realizations 200
 ```
 
-Genera `results/comparison_metrics.csv`, `results/comparison_per_instance.json`, y en
-`figures/` por tamaño y solver: `*_routes.png`, `*_convergence.png`, `*_costhist.png`,
-más `comparison_metrics.png` (barras agrupadas por tamaño).
+Cada run genera `results/<NN_slug>/comparison_metrics.csv` + `.json`, y en
+`figures/<NN_slug>/` por tamaño y solver: `*_routes.png`, `*_costhist.png`,
+`*_convergence.png` (solo exactos), más `comparison_metrics.png`.
 
 `exact-bc-tw` usa una formulación dirigida (~n² binarias); n=50 requiere licencia
 académica de Gurobi y el runner lo **salta** automáticamente si excede la licencia.

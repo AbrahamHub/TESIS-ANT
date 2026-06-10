@@ -86,8 +86,12 @@ def generate_instance(num_customers: int, *, seed: int, capacity_mode: str = "bi
     ], dtype=float)
     locations = np.vstack([depot_xy, customer_xy])  # depósito primero
 
-    # Demandas U[0, 100]; depósito = 0 (DEMAND_RANGE oficial).
-    demands = np.random.randint(DEMAND_RANGE[0], DEMAND_RANGE[1] + 1,
+    # Demandas U[1, 100]; depósito = 0. Se usa 1 como cota inferior (no la 0 oficial)
+    # para que NINGÚN cliente tenga demanda 0: así el único nodo con demanda 0 es el
+    # depósito y los solvers heredados que detectan el depósito por demanda==0
+    # (ACO/Tabu) no confunden clientes con depósitos. Desviación documentada.
+    low = max(1, DEMAND_RANGE[0])
+    demands = np.random.randint(low, DEMAND_RANGE[1] + 1,
                                 size=num_customers + 1).astype(float)
     demands[0] = 0.0
 

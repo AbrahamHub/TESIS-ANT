@@ -188,7 +188,7 @@ def plot_metrics_comparison(df, path: Path) -> None:
         if col == "feasibility":
             ax.set_ylim(0, 1)
     axes[0].legend(fontsize=8, loc="upper left")
-    fig.suptitle("Comparación de baselines exactos", fontsize=12)
+    fig.suptitle("Comparación de métodos por tamaño", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig.savefig(path, dpi=140)
     plt.close(fig)
@@ -200,17 +200,25 @@ def make_all(instance, solution, figdir: Path, *, solver: str, size: int,
     tag = f"{solver}_n{size}_i{instance_idx}"
     paths = []
     gap = solution.extras.get("gap", float("nan"))
-    opt_tag = "óptima" if (np.isfinite(gap) and gap <= 1e-6) else \
-        (f"incumbente (gap={gap:.1%})" if np.isfinite(gap) else "incumbente")
+    if np.isfinite(gap):
+        opt_tag = "óptima" if gap <= 1e-6 else f"incumbente (gap={gap:.1%})"
+    else:
+        opt_tag = "heurística"  # metaheurísticas: sin cota/gap
+    has_det = np.isfinite(solution.extras.get("det_cost", float("nan")))
+    det_txt = f" · det={solution.extras.get('det_cost'):.0f}" if has_det else ""
     p1 = figdir / f"{tag}_routes.png"
     plot_routes(instance, solution, p1,
                 title=f"{solver} · n={size} · {solution.extras.get('n_routes', 0)} rutas · "
-                      f"{opt_tag} · det={solution.extras.get('det_cost', float('nan')):.0f}")
-    p2 = figdir / f"{tag}_convergence.png"
-    plot_convergence(solution, p2, title=f"Branch & Cut · n={size} · "
-                     f"gap={solution.extras.get('gap', float('nan')):.2%}")
+                      f"{opt_tag}{det_txt}")
+    paths.append(p1)
+    # La convergencia solo aplica a los métodos exactos (Branch & Cut).
+    if solution.extras.get("convergence_log"):
+        p2 = figdir / f"{tag}_convergence.png"
+        plot_convergence(solution, p2, title=f"Branch & Cut · n={size} · "
+                         f"gap={solution.extras.get('gap', float('nan')):.2%}")
+        paths.append(p2)
     p3 = figdir / f"{tag}_costhist.png"
     plot_cost_hist(instance, solution, p3, alpha=alpha,
                    title=f"Costo estocástico · n={size} · feas={solution.feasibility:.2f}")
-    paths.extend([p1, p2, p3])
+    paths.append(p3)
     return paths

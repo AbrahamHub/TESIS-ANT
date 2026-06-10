@@ -23,9 +23,15 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from . import io, viz, metrics
+from . import io, viz, metrics, paradigms
 from ._bootstrap import SVRP_ROOT, get_solver
-from . import solvers  # noqa: F401  (registra exact-bc, exact-bc-tw)
+from . import solvers  # noqa: F401  (registra exact-bc, exact-bc-tw, aco, tabu)
+
+
+def _build_meta_solver(name, args):
+    cls = get_solver(name)
+    return cls(default_realizations=args.realizations, alpha=args.alpha,
+               late_penalty=args.late_penalty, accident_scale=args.accident_scale)
 
 
 def _build_solver(name: str, args):
@@ -38,16 +44,20 @@ def _build_solver(name: str, args):
         if name == "exact-bc-tw":
             kw["tw_penalty"] = args.tw_penalty
         return cls(**kw)
+    if name in ("aco", "tabu"):
+        return _build_meta_solver(name, args)
     return cls()
 
 
 def run(args) -> pd.DataFrame:
     sizes: List[int] = [int(s) for s in args.sizes.split(",") if s.strip()]
     solver_names: List[str] = [s.strip() for s in args.solver.split(",") if s.strip()]
-    figdir = SVRP_ROOT / "figures"
-    resdir = SVRP_ROOT / "results"
+    pslug = paradigms.paradigm_dir(solver_names)  # p.ej. "01_exact", "02_metaheuristic", "cross"
+    figdir = SVRP_ROOT / "figures" / pslug
+    resdir = SVRP_ROOT / "results" / pslug
     figdir.mkdir(parents=True, exist_ok=True)
     resdir.mkdir(parents=True, exist_ok=True)
+    print(f"Paradigma: {pslug}  ->  results/{pslug}/  figures/{pslug}/")
 
     instances = io.load_sizes(sizes, args.instances, base_seed=args.seed,
                               capacity_mode=args.capacity_mode)
@@ -108,8 +118,8 @@ def _print_summary(df: pd.DataFrame) -> None:
     show["size"] = show["size"].astype(int)
     with pd.option_context("display.float_format", lambda v: f"{v:,.2f}"):
         print(show.to_string(index=False))
-    print("\nLectura: comparar exact-bc (ignora ventanas) vs exact-bc-tw (las respeta)")
-    print("aísla cuánto de la infactibilidad proviene de la estocasticidad y cuánto de las ventanas.")
+    print("\nLectura: E[c]=tiempo de viaje esperado · E[c+Q]=con recurso de 2ª etapa · "
+          "CVaR=riesgo de cola · feasibility=tasa de factibilidad · gap=brecha MIP.")
 
 
 def main() -> None:
