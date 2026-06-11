@@ -146,6 +146,22 @@ necesita la **licencia académica gratuita** de Gurobi:
 - **Pesos de recurso**: `late_penalty` (recurso Q, por minuto de retraso) y `tw_penalty`
   (tardanza nominal en el MIP) valen 1.0 por defecto; `E[c+Q]` y CVaR escalan linealmente
   con `late_penalty` (hiperparámetro de modelado, reportar sensibilidad si se varía).
+
+## Validación y correcciones (transparencia)
+
+- **Defensa en profundidad (N6):** `exact-bc`/`exact-bc-tw` validan cada solución
+  post-solve (capacidad por ruta, cada cliente servido una vez, gap ≥ 0) y **lanzan
+  error** si se viola — un baseline exacto que "miente" contaminaría toda la comparación.
+- **Bug corregido (N1):** una versión previa con separación fraccionaria (`cbCut`) producía
+  soluciones de `exact-bc` que **violaban la capacidad** (objetivo < óptimo real). Se
+  eliminó; los resultados se regeneraron. Números de `exact-bc` n=50 **corregidos**:
+  gap ≈ 28 %, `det` ≈ 9150 (los antiguos 17 %/7597 eran inválidos).
+- **n=50 es referencia subóptima (N3):** en n=50 `exact-bc` no cierra (gap ≈ 28 %), así que
+  comparar otro método "contra el exacto" en n=50 es contra un **incumbente**, no el óptimo.
+- **NCO supervisado — limitaciones (N2/N5):** la entropía cruzada es un *proxy* del costo de
+  ruta (CE baja ≠ rutas óptimas; hay sobreajuste, mitigado con dropout); la imitación voraz
+  es **con pérdida** incluso con maestro factible (`nco-sl-feas` llega a feas≈0.33, no al 1.0
+  de `aco`).
 - **Instancias** (`io.py`): se reutilizan las primitivas oficiales
   `city.City.batch_sample` (ubicaciones) y `time_windows_generator.sample_time_window`
   (ventanas residencial/comercial). Para `num_cities = 1` (todos nuestros tamaños)

@@ -55,6 +55,26 @@ def _components(adj: Dict[int, List[int]], nodes: List[int]) -> List[List[int]]:
     return comps
 
 
+def validate_cvrp_routes(routes, demands, cap, customers, *, gap=None, tol=1e-6) -> None:
+    """Defensa en profundidad (N6): verifica los invariantes de una solución CVRP
+    exacta y **lanza** ``ValueError`` si se violan. Habría cazado de inmediato el bug
+    de la separación fraccionaria con ``cbCut`` (rutas que excedían la capacidad).
+
+    Comprueba: (1) cada cliente servido exactamente una vez; (2) ninguna ruta excede
+    la capacidad; (3) el gap reportado no es negativo."""
+    dem = np.asarray(demands, dtype=float)
+    served = sorted(int(c) for r in routes for c in r)
+    expected = sorted(int(c) for c in customers)
+    if served != expected:
+        raise ValueError(f"validación CVRP: clientes servidos {served} != esperados {expected}")
+    for r in routes:
+        d = float(dem[list(r)].sum()) if r else 0.0
+        if d > cap * (1.0 + tol):
+            raise ValueError(f"validación CVRP: ruta {list(r)} demanda={d:.1f} > capacidad={cap:.1f}")
+    if gap is not None and np.isfinite(gap) and gap < -tol:
+        raise ValueError(f"validación CVRP: gap negativo {gap}")
+
+
 def violated_rci(
     customers: List[int],
     demands: np.ndarray,
@@ -106,7 +126,7 @@ class ExactBranchCut(Solver):
         alpha: float = 0.95,
         late_penalty: float = 1.0,
         accident_scale: float = 1.0,
-        threads: int = 0,
+        threads: int = 1,  # 1 = separación perezosa correcta (multihilo dejaba pasar violaciones)
         verbose: bool = False,
     ):
         self.time_limit = time_limit
@@ -165,7 +185,12 @@ class ExactBranchCut(Solver):
             # entera final), así que se eliminó: la separación perezosa entera es la
             # única correcta. (Una separación fraccionaria segura requeriría CVRPSEP.)
             if where == GRB.Callback.MIPSOL:
-                yval = model.cbGetSolution(y)
+                # cbGetSolution debe recibir una LISTA y mapearse a las claves
+                # explícitamente; pasar el dict directamente desalinea las claves y
+                # la separación actuaría sobre un grafo soporte equivocado (era el bug
+                # que dejaba pasar rutas que violaban la capacidad).
+                vals = model.cbGetSolution(list(y.values()))
+                yval = dict(zip(y.keys(), vals))
                 for S, k in violated_rci(customers, demands, cap,
                                          lambda i, j: yval[_ekey(i, j)], eps=0.5):
                     expr = gp.quicksum(y[_ekey(S[a], S[b])]
@@ -192,6 +217,8 @@ class ExactBranchCut(Solver):
         routes = self._extract_routes(y, m, depot, n)
         det_cost = float(m.ObjVal) if m.SolCount > 0 else float("nan")  # tiempo de viaje nominal
         gap = float(m.MIPGap) if m.SolCount > 0 else float("nan")
+        if m.SolCount > 0:  # N6: defensa en profundidad
+            validate_cvrp_routes(routes, demands, cap, customers, gap=gap)
 
         R = num_realizations if num_realizations and num_realizations > 1 else self.default_realizations
         seed = int(instance.metadata.get("seed", 0))

@@ -26,7 +26,7 @@ import numpy as np
 
 from .._bootstrap import Instance, Solution, Solver, register_solver
 from .. import stochastic
-from .exact_bc import violated_rci
+from .exact_bc import violated_rci, validate_cvrp_routes
 
 
 @register_solver("exact-bc-tw")
@@ -43,7 +43,7 @@ class ExactBranchCutTW(Solver):
         late_penalty: float = 1.0,
         tw_penalty: float = 1.0,
         accident_scale: float = 1.0,
-        threads: int = 0,
+        threads: int = 1,  # 1 = separación perezosa correcta (multihilo dejaba pasar violaciones)
         verbose: bool = False,
     ):
         self.time_limit = time_limit
@@ -118,7 +118,8 @@ class ExactBranchCutTW(Solver):
             # la separación fraccionaria con cbCut producía soluciones que violaban
             # la capacidad, así que se eliminó (ver nota en exact_bc.py).
             if where == GRB.Callback.MIPSOL:
-                xval = model.cbGetSolution(x)
+                vals = model.cbGetSolution(list(x.values()))
+                xval = dict(zip(x.keys(), vals))
                 for S, k in violated_rci(customers, demands, cap,
                                          lambda i, j: xval[i, j] + xval[j, i], eps=0.5):
                     expr = gp.quicksum(x[i, j] for i in S for j in S if i != j)
@@ -143,6 +144,9 @@ class ExactBranchCutTW(Solver):
         solve_time = time.time() - t0
 
         routes = self._extract_routes(x, m, depot, n)
+        if m.SolCount > 0:  # N6: defensa en profundidad (capacidad + served-once)
+            validate_cvrp_routes(routes, demands, cap, customers,
+                                 gap=float(m.MIPGap) if m.SolCount > 0 else None)
         mip_obj = float(m.ObjVal) if m.SolCount > 0 else float("nan")
         det_time = float(sum(tau[i, j] * x[i, j].X for (i, j) in x)) if m.SolCount > 0 else float("nan")
         nominal_late = float(sum(L[h].X for h in customers)) if m.SolCount > 0 else float("nan")

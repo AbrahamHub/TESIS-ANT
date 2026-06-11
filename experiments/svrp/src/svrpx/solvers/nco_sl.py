@@ -126,25 +126,26 @@ def _build_model_cls():
     import torch.nn as nn
 
     class PointerNet(nn.Module):
-        def __init__(self, feat_dim: int = 5, hidden: int = 128):
+        def __init__(self, feat_dim: int = 5, hidden: int = 128, dropout: float = 0.1):
             super().__init__()
             self.hidden = hidden
             self.embed = nn.Linear(feat_dim, hidden)
             self.encoder = nn.LSTM(hidden, hidden, batch_first=True)
             self.dec_cell = nn.LSTMCell(hidden + 1, hidden)
+            self.drop = nn.Dropout(dropout)  # N5: regularización (off en eval -> inferencia determinista)
             # Atención aditiva (Bahdanau): score = v^T tanh(W1 enc + W2 query)
             self.W1 = nn.Linear(hidden, hidden, bias=False)
             self.W2 = nn.Linear(hidden, hidden, bias=False)
             self.v = nn.Linear(hidden, 1, bias=False)
 
         def encode(self, feat):  # feat (B, n, F)
-            emb = self.embed(feat)                  # (B, n, H)
+            emb = self.drop(self.embed(feat))       # (B, n, H)
             enc, (h, c) = self.encoder(emb)         # enc (B, n, H)
-            return emb, enc, (h[-1], c[-1])
+            return emb, self.drop(enc), (h[-1], c[-1])
 
         def attention(self, enc, query, mask):      # enc (B,n,H), query (B,H), mask (B,n) bool feasible
             w1 = self.W1(enc)                        # (B,n,H)
-            w2 = self.W2(query).unsqueeze(1)         # (B,1,H)
+            w2 = self.W2(self.drop(query)).unsqueeze(1)  # (B,1,H)
             scores = self.v(torch.tanh(w1 + w2)).squeeze(-1)  # (B,n)
             scores = scores.masked_fill(~mask, float("-inf"))
             return scores
@@ -177,7 +178,7 @@ def _gen_labeled(train_sizes, n_per_size: int, base_seed: int, teacher_name: str
 
 
 def train_pointer_net(train_sizes=(10, 20), n_per_size: int = 256, epochs: int = 100,
-                      hidden: int = 128, lr: float = 1e-3, batch_size: int = 32,
+                      hidden: int = 128, dropout: float = 0.1, lr: float = 1e-3, batch_size: int = 32,
                       base_seed: int = 99000, teacher: str = "exact-bc",
                       val_frac: float = 0.1, device: str = "cpu", verbose: bool = True):
     import torch
@@ -185,7 +186,7 @@ def train_pointer_net(train_sizes=(10, 20), n_per_size: int = 256, epochs: int =
 
     torch.manual_seed(base_seed)
     PointerNet = _build_model_cls()
-    model = PointerNet(feat_dim=5, hidden=hidden).to(device)
+    model = PointerNet(feat_dim=5, hidden=hidden, dropout=dropout).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     data = _gen_labeled(train_sizes, n_per_size, base_seed, teacher)
@@ -361,6 +362,7 @@ class NCOSupervised(Solver):
         n_per_size: int = 256,
         epochs: int = 100,
         hidden: int = 128,
+        dropout: float = 0.1,
         device: str = "cpu",
         default_realizations: int = 200,
         alpha: float = 0.95,
@@ -375,6 +377,7 @@ class NCOSupervised(Solver):
         self.n_per_size = n_per_size
         self.epochs = epochs
         self.hidden = hidden
+        self.dropout = dropout
         self.device = device
         self.default_realizations = default_realizations
         self.alpha = alpha
@@ -389,7 +392,7 @@ class NCOSupervised(Solver):
     def _model_path(self) -> Path:
         sz = "-".join(str(s) for s in self.train_sizes)
         return _MODEL_DIR / (f"nco_sl_{self.teacher}_n{sz}_t{self.n_per_size}"
-                             f"_e{self.epochs}_h{self.hidden}.pt")
+                             f"_e{self.epochs}_h{self.hidden}_d{self.dropout}.pt")
 
     def _ensure_model(self):
         if self._model is not None:
@@ -398,15 +401,15 @@ class NCOSupervised(Solver):
         PointerNet = _build_model_cls()
         path = self._model_path()
         if self.cache and path.exists():
-            self._model = PointerNet(feat_dim=5, hidden=self.hidden).to(self.device)
+            self._model = PointerNet(feat_dim=5, hidden=self.hidden, dropout=self.dropout).to(self.device)
             self._model.load_state_dict(torch.load(path, map_location=self.device))
             self._model.eval()
             return
         t0 = time.time()
         self._model = train_pointer_net(
             train_sizes=self.train_sizes, n_per_size=self.n_per_size, epochs=self.epochs,
-            hidden=self.hidden, base_seed=self.train_seed, teacher=self.teacher,
-            device=self.device, verbose=self.verbose,
+            hidden=self.hidden, dropout=self.dropout, base_seed=self.train_seed,
+            teacher=self.teacher, device=self.device, verbose=self.verbose,
         )
         self._train_time = time.time() - t0
         if self.cache:
