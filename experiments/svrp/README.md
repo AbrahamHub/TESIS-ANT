@@ -12,7 +12,7 @@ garantizar comparabilidad.
 |---|-----------|--------|--------|---------|
 | 1 | **Métodos Exactos (Branch & Cut)** | ✅ implementado | `exact-bc` (CVRP) · `exact-bc-tw` (CVRPTW) | `*/01_exact/` |
 | 2 | **Metaheurísticas (ACO / Tabu)** | ✅ implementado | `aco` · `tabu` (oficiales, re-puntuados con CRN) | `*/02_metaheuristic/` |
-| 3 | **NCO (supervisado)** | ✅ implementado | `nco-sl` (Pointer Network, imita a exact-bc) | `*/03_nco_supervised/` |
+| 3 | **NCO (supervisado)** | ✅ implementado | `nco-sl` (imita exact-bc) · `nco-sl-feas` (imita aco) | `*/03_nco_supervised/` |
 | 4 | NCO determinista (POMO / AM) | ⏳ pendiente | — | `*/04_nco_pomo_am/` |
 | 5 | **EHBG-FACS** (propuesta) | ⏳ pendiente | — | `*/05_ehbg_facs/` |
 
@@ -69,19 +69,23 @@ PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
     --solver aco,tabu --sizes 10,20,50 --instances 3 --realizations 200
 
 # Paradigma 3 — NCO supervisado (Pointer Network; entrena/cachea en el 1.er uso):
+#   nco-sl      imita a exact-bc (óptimo, ignora ventanas)
+#   nco-sl-feas imita a aco (factible) -> variante de control
 PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
-    --solver nco-sl --sizes 10,20,50 --instances 3 --realizations 200
+    --solver nco-sl,nco-sl-feas --sizes 10,20,50 --instances 3 --realizations 200
 
 # Comparación entre paradigmas (escribe en cross/):
 PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
-    --solver exact-bc,aco,tabu,nco-sl --sizes 10,20 --instances 3 --realizations 200
+    --solver exact-bc,aco,tabu,nco-sl,nco-sl-feas --sizes 10,20 --instances 3 --realizations 200
 ```
 
-El paradigma 3 requiere **PyTorch** (`pip install torch`). `nco-sl` entrena una Pointer
-Network imitando las rutas óptimas de `exact-bc` sobre instancias de n=20 (etiquetas
-caras), la cachea en `data/models/`, y luego hace **inferencia en milisegundos**. Su
-calidad es casi óptima en el tamaño de entrenamiento y se degrada fuera de distribución
-(n=50) — la limitación clásica del NCO supervisado que motivó el paso al RL (paradigma 4).
+El paradigma 3 requiere **PyTorch** (`pip install torch`). La Pointer Network entrena
+imitando las rutas de un **maestro configurable** (etiquetas caras) sobre instancias de
+n=10 y 20, las cachea en `data/models/`, y luego hace **inferencia en milisegundos**.
+Clave: la (in)factibilidad la define el **maestro** — `nco-sl` (maestro `exact-bc`) hereda
+su fragilidad ante ventanas (feas≈0); `nco-sl-feas` (maestro `aco`) imita rutas factibles
+(feas>0). SVRPBench no trae un baseline de NCO *supervisado* (los suyos son RL/POMO =
+paradigma 4), así que esta es una implementación propia.
 
 Cada run genera `results/<NN_slug>/comparison_metrics.csv` + `.json`, y en
 `figures/<NN_slug>/` por tamaño y solver: `*_routes.png`, `*_costhist.png`,
@@ -125,8 +129,9 @@ necesita la **licencia académica gratuita** de Gurobi:
   `τ`. Así el plan incorpora la congestión *conocida* y la infactibilidad residual bajo ξ
   es atribuible a la incertidumbre, no a un horario subestimado. `det_cost` es entonces el
   tiempo de viaje nominal (comparable con `E[c]`).
-- **Branch & Cut**: los cortes RCI/DFJ se separan en soluciones **enteras** (`MIPSOL`,
-  exacto) y **fraccionarias** (`MIPNODE`, heurística de componentes) para fortalecer la cota.
+- **Branch & Cut**: los cortes RCI/DFJ se separan como *lazy constraints* solo sobre
+  soluciones **enteras** (`MIPSOL`) — correcto y exacto. (Un intento de separación
+  fraccionaria con `cbCut` producía soluciones que violaban la capacidad y se eliminó.)
 
 ## Perillas y salvedades
 

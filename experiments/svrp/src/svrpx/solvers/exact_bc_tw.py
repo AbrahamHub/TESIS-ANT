@@ -11,7 +11,7 @@ modo que la congestión conocida se incorpora al plan y la infactibilidad residu
   min  sum_{i!=j} τ_ij x_ij  +  λ · sum_i L_i
   s.a. sum_j x_ij = 1,  sum_i x_ij = 1,  sum_j x_0j = sum_i x_i0 = K
        t_j >= t_i + τ_ij − M(1 − x_ij),  t_j >= a_j,  L_j >= t_j − b_j     (MTZ + ventanas soft)
-       sum_{i,j∈S} x_ij <= |S| − ⌈dem(S)/cap⌉   ∀S                          (RCI; lazy + user cuts)
+       sum_{i,j∈S} x_ij <= |S| − ⌈dem(S)/cap⌉   ∀S                          (RCI; lazy, solo enteras)
 
 Tamaño: ~n² binarias; n<=~30 entra en la licencia restringida de Gurobi, n=50 requiere
 licencia académica (el runner lo salta con un aviso claro).
@@ -43,7 +43,6 @@ class ExactBranchCutTW(Solver):
         late_penalty: float = 1.0,
         tw_penalty: float = 1.0,
         accident_scale: float = 1.0,
-        frac_sep_until_node: int = 200,
         threads: int = 0,
         verbose: bool = False,
     ):
@@ -54,7 +53,6 @@ class ExactBranchCutTW(Solver):
         self.late_penalty = late_penalty
         self.tw_penalty = tw_penalty
         self.accident_scale = accident_scale
-        self.frac_sep_until_node = frac_sep_until_node
         self.threads = threads
         self.verbose = verbose
 
@@ -82,7 +80,6 @@ class ExactBranchCutTW(Solver):
         m.Params.MIPGap = self.mip_gap
         m.Params.Threads = self.threads
         m.Params.LazyConstraints = 1
-        m.Params.PreCrush = 1
 
         x = {(i, j): m.addVar(vtype=GRB.BINARY, name=f"x_{i}_{j}")
              for i in range(n) for j in range(n) if i != j}
@@ -116,25 +113,16 @@ class ExactBranchCutTW(Solver):
         conv_log: List[Tuple[float, float, float]] = []
         state = {"bst": None, "bnd": None}
 
-        def add_cut(model, S, k, lazy):
-            expr = gp.quicksum(x[i, j] for i in S for j in S if i != j)
-            (model.cbLazy if lazy else model.cbCut)(expr <= len(S) - k)
-
         def callback(model, where):
+            # Separación RCI de capacidad solo sobre soluciones ENTERAS (cbLazy);
+            # la separación fraccionaria con cbCut producía soluciones que violaban
+            # la capacidad, así que se eliminó (ver nota en exact_bc.py).
             if where == GRB.Callback.MIPSOL:
                 xval = model.cbGetSolution(x)
                 for S, k in violated_rci(customers, demands, cap,
                                          lambda i, j: xval[i, j] + xval[j, i], eps=0.5):
-                    add_cut(model, S, k, lazy=True)
-            elif where == GRB.Callback.MIPNODE:
-                if model.cbGet(GRB.Callback.MIPNODE_STATUS) != GRB.OPTIMAL:
-                    return
-                if model.cbGet(GRB.Callback.MIPNODE_NODCNT) > self.frac_sep_until_node:
-                    return
-                xrel = model.cbGetNodeRel(x)
-                for S, k in violated_rci(customers, demands, cap,
-                                         lambda i, j: xrel[i, j] + xrel[j, i], thr=1e-4, eps=1e-3):
-                    add_cut(model, S, k, lazy=False)
+                    expr = gp.quicksum(x[i, j] for i in S for j in S if i != j)
+                    model.cbLazy(expr <= len(S) - k)
             elif where == GRB.Callback.MIP:
                 tt = model.cbGet(GRB.Callback.RUNTIME)
                 bst = model.cbGet(GRB.Callback.MIP_OBJBST)

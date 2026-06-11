@@ -21,6 +21,7 @@ PARADIGM_OF = {
     "tabu": (2, "metaheuristic"),
     "nn2opt": (2, "metaheuristic"),
     "nco-sl": (3, "nco_supervised"),
+    "nco-sl-feas": (3, "nco_supervised"),
 }
 
 PARADIGM_LABEL = {

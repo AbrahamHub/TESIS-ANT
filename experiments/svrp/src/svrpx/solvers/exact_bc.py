@@ -3,14 +3,16 @@
 Paradigma de referencia (cota óptima determinista). Resuelve el CVRP determinista
 sobre el **tiempo de viaje nominal** ``τ_ij = d_ij + retraso_de_congestión(t*)``
 (objetivo de tiempo de viaje de SVRPBench, no solo distancia) con la formulación de
-flujo **no dirigida** de dos índices y **branch-and-cut genuino**: desigualdades de
-**capacidad redondeada / eliminación de subtours (RCI/DFJ)** separadas tanto en
-soluciones **enteras** (``MIPSOL``, exacto) como **fraccionarias**
-(``MIPNODE``, heurística de componentes conexas) para fortalecer la cota.
+flujo **no dirigida** de dos índices y **branch-and-cut**: desigualdades de
+**capacidad redondeada / eliminación de subtours (RCI/DFJ)** separadas como
+*lazy constraints* sobre soluciones **enteras** (``MIPSOL``). La separación es solo
+entera (correcta y exacta); un intento de separación fraccionaria con ``cbCut``
+producía soluciones que VIOLABAN la capacidad y se eliminó (una separación
+fraccionaria segura requeriría CVRPSEP). Gurobi aporta además sus propios cortes.
 
   min  sum_{e={i,j}} τ_e y_e
   s.a. sum_{e ∋ h} y_e = 2,  sum_j y_{0j} = 2K
-       sum_{e ⊆ S} y_e <= |S| − k(S)   ∀ S ⊆ clientes   [lazy + user cuts]
+       sum_{e ⊆ S} y_e <= |S| − k(S)   ∀ S ⊆ clientes   [lazy]
   con k(S) = max(1, ⌈demanda(S)/cap⌉).
 
 La formulación no dirigida (~n²/2 variables) entra en la licencia restringida de
@@ -104,7 +106,6 @@ class ExactBranchCut(Solver):
         alpha: float = 0.95,
         late_penalty: float = 1.0,
         accident_scale: float = 1.0,
-        frac_sep_until_node: int = 200,
         threads: int = 0,
         verbose: bool = False,
     ):
@@ -114,7 +115,6 @@ class ExactBranchCut(Solver):
         self.alpha = alpha
         self.late_penalty = late_penalty
         self.accident_scale = accident_scale
-        self.frac_sep_until_node = frac_sep_until_node
         self.threads = threads
         self.verbose = verbose
 
@@ -137,7 +137,6 @@ class ExactBranchCut(Solver):
         m.Params.MIPGap = self.mip_gap
         m.Params.Threads = self.threads
         m.Params.LazyConstraints = 1
-        m.Params.PreCrush = 1  # conservar cortes de usuario en presolve
 
         y: Dict[Tuple[int, int], "gp.Var"] = {}
         for a in range(n):
@@ -158,29 +157,20 @@ class ExactBranchCut(Solver):
         conv_log: List[Tuple[float, float, float]] = []
         state = {"bst": None, "bnd": None}
 
-        def add_cut(model, S, k, lazy):
-            expr = gp.quicksum(y[_ekey(S[a], S[b])]
-                               for a in range(len(S)) for b in range(a + 1, len(S)))
-            if lazy:
-                model.cbLazy(expr <= len(S) - k)
-            else:
-                model.cbCut(expr <= len(S) - k)
-
         def callback(model, where):
+            # Separación RCI/DFJ exacta sobre soluciones ENTERAS (cbLazy). NOTA: se
+            # separa solo aquí, no en nodos fraccionarios. Un intento previo de
+            # separación fraccionaria con cbCut producía soluciones que VIOLABAN la
+            # capacidad (los cortes de usuario cbCut no se imponen sobre la solución
+            # entera final), así que se eliminó: la separación perezosa entera es la
+            # única correcta. (Una separación fraccionaria segura requeriría CVRPSEP.)
             if where == GRB.Callback.MIPSOL:
                 yval = model.cbGetSolution(y)
                 for S, k in violated_rci(customers, demands, cap,
                                          lambda i, j: yval[_ekey(i, j)], eps=0.5):
-                    add_cut(model, S, k, lazy=True)
-            elif where == GRB.Callback.MIPNODE:
-                if model.cbGet(GRB.Callback.MIPNODE_STATUS) != GRB.OPTIMAL:
-                    return
-                if model.cbGet(GRB.Callback.MIPNODE_NODCNT) > self.frac_sep_until_node:
-                    return
-                yrel = model.cbGetNodeRel(y)
-                for S, k in violated_rci(customers, demands, cap,
-                                         lambda i, j: yrel[_ekey(i, j)], thr=1e-4, eps=1e-3):
-                    add_cut(model, S, k, lazy=False)
+                    expr = gp.quicksum(y[_ekey(S[a], S[b])]
+                                       for a in range(len(S)) for b in range(a + 1, len(S)))
+                    model.cbLazy(expr <= len(S) - k)
             elif where == GRB.Callback.MIP:
                 t = model.cbGet(GRB.Callback.RUNTIME)
                 bst = model.cbGet(GRB.Callback.MIP_OBJBST)

@@ -19,8 +19,20 @@ Diseño (auto-contenido en PyTorch, sin RL4CO):
   * **Inferencia:** decodificación voraz con máscaras → rutas; se mide el tiempo de
     **inferencia** (rápido), con el costo de entrenamiento reportado aparte (amortizado).
   * **Puntuación:** con el evaluador estocástico compartido (CRN), comparable con el
-    resto de paradigmas. Como imita a ``exact-bc`` (que ignora ventanas), hereda su
-    fragilidad ante ventanas bajo ξ — justo el rasgo del paradigma.
+    resto de paradigmas.
+
+Aclaraciones de la revisión:
+  * **P1/P2 — maestro configurable.** SVRPBench **no** trae un baseline de NCO
+    *supervisado* (sus baselines de aprendizaje son RL/POMO = paradigma 4), así que esta
+    es una implementación **propia**, no un envoltorio oficial. El NCO **imita al maestro
+    que se le indique**: con `exact-bc` (default, `nco-sl`) hereda su fragilidad ante
+    ventanas (feas≈0); con un maestro factible (`aco`, variante `nco-sl-feas`) imita rutas
+    factibles. Es decir, la (in)factibilidad la define el maestro, no el paradigma NCO.
+  * **P3** — la secuencia objetivo se canonicaliza (orden de rutas y orientación) para
+    mitigar el problema de óptimos múltiples del aprendizaje supervisado.
+  * **P4** — entrena en una **distribución de tamaños** (default 10 y 20) para mejorar la
+    generalización; se reporta una pérdida de **validación** (hold-out, P6).
+  * **P6** — limitaciones del preliminar: decodificación voraz (sin *beam*), CPU.
 
 Nota: el ``import torch`` se hace de forma diferida para que el paquete cargue aunque
 PyTorch no esté instalado (paradigmas 1–2 no lo necesitan).
@@ -61,14 +73,47 @@ def node_features(instance: Instance, depot: int = 0) -> np.ndarray:
     return feat.astype(np.float32)
 
 
-def teacher_sequence(routes: List[List[int]], depot: int = 0) -> List[int]:
-    """Aplana rutas (clientes) en la secuencia objetivo del decodificador:
-    ``[[1,2],[3]] -> [1, 2, depot, 3, depot]`` (el decodificador arranca en el depósito)."""
-    seq: List[int] = []
+def teacher_sequence(routes: List[List[int]], locations: np.ndarray, depot: int = 0) -> List[int]:
+    """Aplana rutas (clientes) en la secuencia objetivo del decodificador con un
+    **orden canónico** (P3) para dar un objetivo consistente entre instancias y mitigar
+    el problema de óptimos múltiples:
+
+      * cada ruta se orienta para empezar por el extremo más cercano al depósito;
+      * las rutas se ordenan por el ángulo de su primer cliente respecto al depósito.
+
+    ``[[1,2],[3]] -> [.., depot, .., depot]`` (el decodificador arranca en el depósito)."""
+    import math
+    locs = np.asarray(locations, dtype=np.float64)
+    dep = locs[depot]
+    canon = []
     for r in routes:
-        seq.extend(int(c) for c in r)
+        r = [int(c) for c in r]
+        if len(r) >= 2:
+            d0 = np.hypot(*(locs[r[0]] - dep))
+            d1 = np.hypot(*(locs[r[-1]] - dep))
+            if d1 < d0:
+                r = r[::-1]
+        canon.append(r)
+    canon.sort(key=lambda r: math.atan2(*(locs[r[0]] - dep)[::-1]))
+    seq: List[int] = []
+    for r in canon:
+        seq.extend(r)
         seq.append(depot)
     return seq
+
+
+def _make_teacher(name: str):
+    """Solver maestro que genera las etiquetas (P1, configurable)."""
+    if name == "exact-bc":
+        from .exact_bc import ExactBranchCut
+        return ExactBranchCut(time_limit=20.0, default_realizations=1)
+    if name == "exact-bc-tw":
+        from .exact_bc_tw import ExactBranchCutTW
+        return ExactBranchCutTW(time_limit=20.0, default_realizations=1)
+    if name == "aco":
+        from .metaheuristic import ACO
+        return ACO(default_realizations=1, n_seeds=1)
+    raise ValueError(f"maestro desconocido: {name!r}")
 
 
 # --------------------------------------------------------------------------- #
@@ -112,25 +157,29 @@ def _build_model_cls():
 # --------------------------------------------------------------------------- #
 
 
-def _gen_labeled(train_size: int, n_train: int, base_seed: int):
-    """Genera instancias de entrenamiento y sus etiquetas óptimas (exact-bc)."""
-    from .exact_bc import ExactBranchCut
-    teacher = ExactBranchCut(time_limit=20.0, default_realizations=1)
+def _gen_labeled(train_sizes, n_per_size: int, base_seed: int, teacher_name: str):
+    """Genera instancias de entrenamiento (de varios tamaños, P4) y sus etiquetas del
+    maestro ``teacher_name`` (P1). Las semillas son disjuntas de las de test."""
+    teacher = _make_teacher(teacher_name)
     data = []
-    for k in range(n_train):
-        inst = svrp_io.generate_instance(train_size, seed=base_seed + k, capacity_mode="binding")
-        sol = teacher.solve(inst, num_realizations=1)
-        if not sol.routes:
-            continue
-        feat = node_features(inst)
-        seq = teacher_sequence(sol.routes, depot=0)
-        data.append((inst, feat, seq))
+    k = 0
+    for size in train_sizes:
+        for _ in range(n_per_size):
+            inst = svrp_io.generate_instance(size, seed=base_seed + k, capacity_mode="binding")
+            k += 1
+            sol = teacher.solve(inst, num_realizations=1)
+            if not sol.routes:
+                continue
+            feat = node_features(inst)
+            seq = teacher_sequence(sol.routes, inst.locations, depot=0)
+            data.append((inst, feat, seq))
     return data
 
 
-def train_pointer_net(train_size: int = 20, n_train: int = 256, epochs: int = 15,
+def train_pointer_net(train_sizes=(10, 20), n_per_size: int = 256, epochs: int = 100,
                       hidden: int = 128, lr: float = 1e-3, batch_size: int = 32,
-                      base_seed: int = 99000, device: str = "cpu", verbose: bool = True):
+                      base_seed: int = 99000, teacher: str = "exact-bc",
+                      val_frac: float = 0.1, device: str = "cpu", verbose: bool = True):
     import torch
     import torch.nn.functional as F
 
@@ -139,32 +188,56 @@ def train_pointer_net(train_size: int = 20, n_train: int = 256, epochs: int = 15
     model = PointerNet(feat_dim=5, hidden=hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
-    data = _gen_labeled(train_size, n_train, base_seed)
+    data = _gen_labeled(train_sizes, n_per_size, base_seed, teacher)
     if verbose:
-        print(f"[nco-sl] etiquetas generadas: {len(data)} instancias n={train_size}")
+        print(f"[nco-sl] etiquetas ({teacher}): {len(data)} instancias, tamaños {list(train_sizes)}")
 
-    feats = torch.tensor(np.stack([d[1] for d in data]), device=device)  # (N, n, 5)
-    demands = torch.tensor(np.stack([np.asarray(d[0].demands, np.float32) for d in data]), device=device)
-    caps = torch.tensor([float(d[0].vehicle_capacities[0]) for d in data], device=device)
-    seqs = [d[2] for d in data]
-    max_len = max(len(s) for s in seqs)
-    N, n, _ = feats.shape
-    targets = torch.full((N, max_len), -100, dtype=torch.long, device=device)
-    for i, s in enumerate(seqs):
-        targets[i, :len(s)] = torch.tensor(s, device=device)
+    # Agrupar por nº de nodos (P4: multi-tamaño); cada grupo se procesa en lotes de
+    # tamaño homogéneo. Pequeño hold-out de validación (P6).
+    from collections import defaultdict
+    by_n = defaultdict(list)
+    for d in data:
+        by_n[d[0].num_nodes].append(d)
 
-    model.train()
+    def make_tensors(items):
+        feats = torch.tensor(np.stack([d[1] for d in items]), device=device)
+        demands = torch.tensor(np.stack([np.asarray(d[0].demands, np.float32) for d in items]), device=device)
+        caps = torch.tensor([float(d[0].vehicle_capacities[0]) for d in items], device=device)
+        seqs = [d[2] for d in items]
+        max_len = max(len(s) for s in seqs)
+        targets = torch.full((len(items), max_len), -100, dtype=torch.long, device=device)
+        for i, s in enumerate(seqs):
+            targets[i, :len(s)] = torch.tensor(s, device=device)
+        return feats, demands, caps, targets
+
+    train_groups, val_groups = [], []
+    for n_nodes, items in by_n.items():
+        n_val = max(1, int(val_frac * len(items)))
+        val_groups.append(make_tensors(items[:n_val]))
+        train_groups.append(make_tensors(items[n_val:]))
+
+    def epoch_loss(groups, train: bool):
+        total, count = 0.0, 0
+        for feats, demands, caps, targets in groups:
+            N = feats.shape[0]
+            perm = torch.randperm(N, device=device) if train else torch.arange(N, device=device)
+            for b0 in range(0, N, batch_size):
+                idx = perm[b0:b0 + batch_size]
+                if train:
+                    loss = _seq_loss(model, feats[idx], demands[idx], caps[idx], targets[idx], device, F)
+                    opt.zero_grad(); loss.backward(); opt.step()
+                else:
+                    with torch.no_grad():
+                        loss = _seq_loss(model, feats[idx], demands[idx], caps[idx], targets[idx], device, F)
+                total += float(loss) * len(idx); count += len(idx)
+        return total / max(1, count)
+
     for ep in range(epochs):
-        perm = torch.randperm(N, device=device)
-        total = 0.0
-        for b0 in range(0, N, batch_size):
-            idx = perm[b0:b0 + batch_size]
-            fb, db, cb, tb = feats[idx], demands[idx], caps[idx], targets[idx]
-            loss = _seq_loss(model, fb, db, cb, tb, device, F)
-            opt.zero_grad(); loss.backward(); opt.step()
-            total += float(loss) * len(idx)
-        if verbose:
-            print(f"[nco-sl] epoch {ep+1}/{epochs}  loss={total/N:.4f}")
+        model.train()
+        tr = epoch_loss(train_groups, train=True)
+        if verbose and (ep + 1) % 10 == 0:
+            model.eval()
+            print(f"[nco-sl] epoch {ep+1}/{epochs}  train={tr:.4f}  val={epoch_loss(val_groups, False):.4f}")
     model.eval()
     return model
 
@@ -283,8 +356,9 @@ class NCOSupervised(Solver):
     def __init__(
         self,
         *,
-        train_size: int = 20,
-        n_train: int = 512,
+        teacher: str = "exact-bc",
+        train_sizes=(10, 20),
+        n_per_size: int = 256,
         epochs: int = 100,
         hidden: int = 128,
         device: str = "cpu",
@@ -296,8 +370,9 @@ class NCOSupervised(Solver):
         cache: bool = True,
         verbose: bool = True,
     ):
-        self.train_size = train_size
-        self.n_train = n_train
+        self.teacher = teacher
+        self.train_sizes = tuple(train_sizes)
+        self.n_per_size = n_per_size
         self.epochs = epochs
         self.hidden = hidden
         self.device = device
@@ -312,7 +387,9 @@ class NCOSupervised(Solver):
         self._train_time = 0.0
 
     def _model_path(self) -> Path:
-        return _MODEL_DIR / f"nco_sl_n{self.train_size}_t{self.n_train}_e{self.epochs}_h{self.hidden}.pt"
+        sz = "-".join(str(s) for s in self.train_sizes)
+        return _MODEL_DIR / (f"nco_sl_{self.teacher}_n{sz}_t{self.n_per_size}"
+                             f"_e{self.epochs}_h{self.hidden}.pt")
 
     def _ensure_model(self):
         if self._model is not None:
@@ -327,9 +404,9 @@ class NCOSupervised(Solver):
             return
         t0 = time.time()
         self._model = train_pointer_net(
-            train_size=self.train_size, n_train=self.n_train, epochs=self.epochs,
-            hidden=self.hidden, base_seed=self.train_seed, device=self.device,
-            verbose=self.verbose,
+            train_sizes=self.train_sizes, n_per_size=self.n_per_size, epochs=self.epochs,
+            hidden=self.hidden, base_seed=self.train_seed, teacher=self.teacher,
+            device=self.device, verbose=self.verbose,
         )
         self._train_time = time.time() - t0
         if self.cache:
@@ -354,8 +431,8 @@ class NCOSupervised(Solver):
             "n_routes": len(routes),
             "realizations": R,
             "train_time_s": self._train_time,
-            "train_size": self.train_size,
-            "n_train": self.n_train,
+            "teacher": self.teacher,
+            "train_sizes": list(self.train_sizes),
         })
         return Solution(
             routes=routes,
@@ -367,3 +444,15 @@ class NCOSupervised(Solver):
             robustness=score.robustness,
             extras=extras,
         )
+
+
+@register_solver("nco-sl-feas")
+class NCOSupervisedFeasible(NCOSupervised):
+    """Variante de control (P1): misma Pointer Network supervisada pero **imitando un
+    maestro factible** (`aco`) en vez de `exact-bc`. Sirve para separar la limitación
+    del *paradigma* NCO de la elección de maestro: si el NCO entrenado con etiquetas
+    factibles es factible, la infactibilidad de `nco-sl` proviene de su maestro, no del NCO."""
+
+    def __init__(self, **kw):
+        kw.setdefault("teacher", "aco")
+        super().__init__(**kw)
