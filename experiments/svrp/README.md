@@ -13,7 +13,7 @@ garantizar comparabilidad.
 | 1 | **Métodos Exactos (Branch & Cut)** | ✅ implementado | `exact-bc` (CVRP) · `exact-bc-tw` (CVRPTW) | `*/01_exact/` |
 | 2 | **Metaheurísticas (ACO / Tabu)** | ✅ implementado | `aco` · `tabu` (oficiales, re-puntuados con CRN) | `*/02_metaheuristic/` |
 | 3 | **NCO (supervisado)** | ✅ implementado | `nco-sl` (imita exact-bc) · `nco-sl-feas` (imita aco) | `*/03_nco_supervised/` |
-| 4 | NCO determinista (POMO / AM) | ⏳ pendiente | — | `*/04_nco_pomo_am/` |
+| 4 | **NCO determinista (POMO / AM)** | ✅ implementado | `nco-rl` (POMO-REINFORCE, misma red que 3) | `*/04_nco_pomo_am/` |
 | 5 | **EHBG-FACS** (propuesta) | ⏳ pendiente | — | `*/05_ehbg_facs/` |
 
 Las salidas se organizan por paradigma: `results/<NN_slug>/` y `figures/<NN_slug>/`
@@ -37,6 +37,7 @@ experiments/svrp/
       exact_bc_tw.py     # 1/5 Branch & Cut CVRPTW (Gurobi, MTZ + ventanas soft)
       metaheuristic.py   # 2/5 ACO y Tabu (oficiales) re-puntuados con CRN
       nco_sl.py          # 3/5 Pointer Network supervisada (PyTorch), imita a exact-bc
+      nco_rl.py          # 4/5 POMO-REINFORCE (RL, misma red que 3, recompensa=costo nominal)
   third_party/svrpbench/ # repo oficial clonado (no versionado)
   data/                  # instancias .npz + modelos NCO cacheados (no versionado)
   results/
@@ -74,10 +75,23 @@ PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
 PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
     --solver nco-sl,nco-sl-feas --sizes 10,20,50 --instances 3 --realizations 200
 
+# Paradigma 4 — NCO determinista por RL (POMO; entrena por REINFORCE en el 1.er uso):
+PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
+    --solver nco-rl --sizes 10,20,50 --instances 3 --realizations 200
+
 # Comparación entre paradigmas (escribe en cross/):
 PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
-    --solver exact-bc,aco,tabu,nco-sl,nco-sl-feas --sizes 10,20 --instances 3 --realizations 200
+    --solver exact-bc,aco,tabu,nco-sl,nco-sl-feas,nco-rl --sizes 10,20 --instances 3 --realizations 200
 ```
+
+El **paradigma 4** (`nco-rl`) usa la **misma arquitectura que el 3** (Pointer Network) pero
+la entrena por **REINFORCE estilo POMO** (N trayectorias desde nodos de inicio distintos +
+línea base compartida), con recompensa = **costo determinista** (sin ξ) y **sin etiquetas**.
+Aísla así la diferencia *supervisado (3) vs RL (4)*. Hallazgo: a igual presupuesto de cómputo
+en M1, el RL es **más difícil de entrenar** que el supervisado (gap mayor) — el RL cambia la
+dependencia de etiquetas caras por **hambre de cómputo/exploración**. Sigue siendo **inferencia
+en milisegundos** y, al entrenarse en el problema determinista, **frágil ante la estocasticidad**
+(ventanas), como señala el anteproyecto.
 
 El paradigma 3 requiere **PyTorch** (`pip install torch`). La Pointer Network entrena
 imitando las rutas de un **maestro configurable** (etiquetas caras) sobre instancias de

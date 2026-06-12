@@ -12,7 +12,8 @@ __all__ = ["exact_bc", "exact_bc_tw", "metaheuristic"]
 # NCO supervisado (3/5): requiere PyTorch. Import guardado para no romper los
 # paradigmas 1–2 si torch no está instalado.
 try:
-    from . import nco_sl      # noqa: F401  (registra "nco-sl")
-    __all__.append("nco_sl")
+    from . import nco_sl      # noqa: F401  (registra "nco-sl", "nco-sl-feas")
+    from . import nco_rl      # noqa: F401  (registra "nco-rl" — POMO/AM)
+    __all__ += ["nco_sl", "nco_rl"]
 except ImportError as _e:  # pragma: no cover
-    print(f"nco-sl no disponible (¿falta torch?): {_e}")
+    print(f"NCO no disponible (¿falta torch?): {_e}")
