@@ -7,19 +7,34 @@ Optimization with Multiple Optima): por cada instancia se generan N trayectorias
 **arrancan en nodos distintos**, y se usa la **media de sus costos como línea base
 compartida** (bajo sesgo y baja varianza) — el truco que estabiliza POMO [4].
 
-Diseño (auto-contenido, sin RL4CO): reutiliza la **misma arquitectura** del paradigma 3
+Diseño (auto-contenido, sin RL4CO): reutiliza la arquitectura del paradigma 3
 (``nco_sl.PointerNet``: codificador LSTM + atención puntero con máscara de factibilidad),
 pero cambia la **señal de entrenamiento**: en lugar de imitar etiquetas (entropía
-cruzada), maximiza ``E[-costo]`` por REINFORCE. Así esta implementación aísla exactamente
-la diferencia *supervisado (3) vs RL (4)* con arquitectura idéntica.
+cruzada), maximiza ``E[-costo]`` por REINFORCE.
 
   * **Recompensa = costo determinista** (tiempo de viaje nominal ``τ``), SIN estocasticidad
     en el entrenamiento → es la "NCO determinista". Por eso, evaluada bajo ξ (CRN), exhibe
-    la **fragilidad ante la estocasticidad** que señala el anteproyecto: aprende rutas de
-    bajo costo nominal que violan ventanas bajo ruido.
-  * **Inferencia**: decodificación voraz multi-start (POMO) → se queda con la mejor ruta;
-    rápida (milisegundos).
+    la **fragilidad ante la estocasticidad** que señala el anteproyecto.
+  * **Inferencia**: decodificación voraz multi-start (POMO) → mejor ruta; rápida (ms).
   * **Puntuación**: con el evaluador estocástico compartido (CRN), comparable con el resto.
+
+Fidelidad y limitaciones (revisión — declaración honesta):
+  * **Q1 — arquitectura:** se aplica el *esquema de entrenamiento* POMO (multi-start +
+    línea base compartida) sobre una **Pointer Network (LSTM)**, NO sobre el *Attention
+    Model* (codificador transformer multi-cabeza) de Kwon/Kool. El esquema POMO es fiel;
+    la arquitectura es la del linaje Pointer Network, no la del AM.
+  * **Q2 — potencia (resuelto tras Q4/Q5):** con el log-prob del nodo forzado excluido
+    (Q4) y el bonus de entropía (Q5), la política es **casi óptima a escala pequeña**
+    (gap ~1.6 % en n=10, ~2.6 % en n=20) y **supera a la NCO supervisada** (paradigma 3) —
+    coherente con la literatura (RL > supervisado). El gap previo (~50 %) era el bug de Q4,
+    no falta de potencia. *Quedan limitaciones declaradas:* arquitectura LSTM (no AM, Q1),
+    sin probar a gran escala ni con *instance augmentation*; para la comparación final
+    conviene validar en n grande o usar el AM/RL4CO oficial.
+  * **Q3 — origen:** SVRPBench no envuelve un POMO (el suyo vive en RL4CO); esta es una
+    implementación propia. La fidelidad al benchmark se limita a instancias + evaluador CRN.
+  * **Q6 — métrica vs objetivo:** optimiza ``τ`` (tiempo nominal); la comparación usa
+    ``E[c]`` (CRN). Coinciden de cerca aquí, pero ``exact-bc`` es óptimo para ``τ``, no
+    necesariamente para ``E[c]``.
 
 ``import torch`` diferido (paradigmas 1–2 no lo requieren).
 """
@@ -45,8 +60,12 @@ _MODEL_DIR = SVRP_ROOT / "data" / "models"
 
 def _rollout_cost(model, feat, demand, cap, tau, device, *, sample=True):
     """Genera N = (n−1) trayectorias por instancia (una por nodo de inicio, POMO) y
-    devuelve ``(logp, cost)`` por trayectoria, vectorizado. No construye rutas (solo
-    entrenamiento). ``tau`` (B,n,n) = tiempo de viaje nominal."""
+    devuelve ``(logp, cost, entropy)`` por trayectoria, vectorizado. No construye rutas
+    (solo entrenamiento). ``tau`` (B,n,n) = tiempo de viaje nominal.
+
+    Q4: el primer nodo está **forzado** (POMO), así que su log-prob NO se acumula en
+    ``logp`` (no es una decisión de la política). Q5: se acumula la entropía por paso
+    para regularizar (mitiga el colapso de modo)."""
     import torch
     B, n, _ = feat.shape
     N = n - 1                                    # un inicio por cliente
@@ -59,6 +78,7 @@ def _rollout_cost(model, feat, demand, cap, tau, device, *, sample=True):
     rem = cap_e.clone()
     last = torch.full((BN,), depot, dtype=torch.long, device=device)
     logp = torch.zeros(BN, device=device)
+    entropy = torch.zeros(BN, device=device)
     cost = torch.zeros(BN, device=device)
     arange = torch.arange(BN, device=device)
     start = (torch.arange(N, device=device).repeat(B)) + 1        # clientes 1..n-1
@@ -71,12 +91,15 @@ def _rollout_cost(model, feat, demand, cap, tau, device, *, sample=True):
         scores = model.attention(enc, h, mask)
         logsm = torch.log_softmax(scores, dim=1)
         if t == 0:
-            nxt = start                                          # POMO: inicio forzado
-        elif sample:
-            nxt = torch.multinomial(torch.softmax(scores, dim=1), 1).squeeze(1)
+            nxt = start                                          # POMO: inicio forzado (Q4: no entra en logp)
         else:
-            nxt = scores.argmax(1)
-        logp = logp + logsm[arange, nxt]
+            if sample:
+                nxt = torch.multinomial(torch.softmax(scores, dim=1), 1).squeeze(1)
+            else:
+                nxt = scores.argmax(1)
+            logp = logp + logsm[arange, nxt]
+            p = torch.softmax(scores, dim=1)
+            entropy = entropy - (p * torch.nan_to_num(logsm, neginf=0.0)).sum(1)  # Q5
         cost = cost + tau[idxB, last, nxt]
         is_depot = nxt == depot
         rem = torch.where(is_depot, cap_e, rem - demand_e[arange, nxt])
@@ -84,7 +107,7 @@ def _rollout_cost(model, feat, demand, cap, tau, device, *, sample=True):
         visited[arange[cust], nxt[cust]] = True
         last = nxt
     cost = cost + tau[idxB, last, depot]                          # cierre al depósito
-    return logp.view(B, N), cost.view(B, N)
+    return logp.view(B, N), cost.view(B, N), entropy.view(B, N)
 
 
 def _decode_greedy(model, instance, device="cpu", depot=0):
@@ -147,6 +170,7 @@ def _decode_greedy(model, instance, device="cpu", depot=0):
 
 def train_pomo(train_sizes=(10, 20), steps_per_size: int = 1000, batch: int = 64,
                hidden: int = 128, dropout: float = 0.0, lr: float = 1e-3,
+               entropy_coef: float = 0.02,
                base_seed: int = 88000, device: str = "cpu", verbose: bool = True):
     import torch
     torch.manual_seed(base_seed)
@@ -165,10 +189,11 @@ def train_pomo(train_sizes=(10, 20), steps_per_size: int = 1000, batch: int = 64
             tau = torch.tensor(np.stack([stochastic.nominal_time_matrix(
                 stochastic.euclidean_int_matrix(i.locations),
                 stochastic.representative_time(i)).astype(np.float32) for i in insts]), device=device)
-            logp, cost = _rollout_cost(model, feat, demand, cap, tau, device, sample=True)
+            logp, cost, entropy = _rollout_cost(model, feat, demand, cap, tau, device, sample=True)
             baseline = cost.mean(1, keepdim=True)                 # POMO: línea base compartida
             adv = (cost - baseline) / (cost.std(1, keepdim=True) + 1e-6)
-            loss = (adv.detach() * logp).mean()                   # REINFORCE (minimiza costo)
+            # REINFORCE (minimiza costo) − bonus de entropía (Q5: mitiga colapso de modo)
+            loss = (adv.detach() * logp).mean() - entropy_coef * entropy.mean()
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()

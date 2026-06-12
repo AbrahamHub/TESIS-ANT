@@ -84,13 +84,21 @@ PYTHONPATH=src .venv/bin/python -m svrpx.run_experiment \
     --solver exact-bc,aco,tabu,nco-sl,nco-sl-feas,nco-rl --sizes 10,20 --instances 3 --realizations 200
 ```
 
-El **paradigma 4** (`nco-rl`) usa la **misma arquitectura que el 3** (Pointer Network) pero
-la entrena por **REINFORCE estilo POMO** (N trayectorias desde nodos de inicio distintos +
-línea base compartida), con recompensa = **costo determinista** (sin ξ) y **sin etiquetas**.
-Aísla así la diferencia *supervisado (3) vs RL (4)*. Hallazgo: a igual presupuesto de cómputo
-en M1, el RL es **más difícil de entrenar** que el supervisado (gap mayor) — el RL cambia la
+El **paradigma 4** (`nco-rl`) aplica el **esquema de entrenamiento POMO** (N trayectorias
+desde nodos de inicio distintos + línea base compartida + REINFORCE, con bonus de entropía),
+recompensa = **costo determinista** (sin ξ) y **sin etiquetas**. Hallazgo: a igual presupuesto
+de cómputo en M1, el RL es **más difícil de entrenar** que el supervisado — cambia la
 dependencia de etiquetas caras por **hambre de cómputo/exploración**. Sigue siendo **inferencia
 en milisegundos** y, al entrenarse en el problema determinista, **frágil ante la estocasticidad**
+
+> **Declaración honesta (revisión).** `nco-rl` es el *esquema* POMO sobre una **Pointer
+> Network (LSTM)**, NO el *Attention Model* transformer de Kwon/Kool — el esquema es fiel, la
+> arquitectura es del linaje Pointer Network (Q1). Con el log-prob del nodo forzado excluido
+> (Q4) y entropía (Q5), es **casi óptimo a escala pequeña** (gap ~1.6 % en n=10, ~2.6 % en
+> n=20) y **supera a la NCO supervisada** — coherente con la literatura (RL > supervisado).
+> *Limitaciones que quedan:* arquitectura LSTM (no AM), sin probar a gran escala ni *instance
+> augmentation*; para la comparación final con EHBG-FACS conviene validar en n grande o usar
+> el AM/RL4CO oficial. SVRPBench no envuelve un POMO (vive en RL4CO): implementación propia.
 (ventanas), como señala el anteproyecto.
 
 El paradigma 3 requiere **PyTorch** (`pip install torch`). La Pointer Network entrena
