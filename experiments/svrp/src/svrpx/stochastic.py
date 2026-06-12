@@ -286,12 +286,18 @@ def score_routes(
     alpha: float = 0.95,
     late_penalty: float = 1.0,
     accident_scale: float = 1.0,
+    vehicle_fixed_cost: float = 0.0,
     depot: int = 0,
     n_buckets: int = 24,
 ) -> StochasticScore:
     """Puntúa rutas sobre ``num_realizations`` escenarios pre-muestreados (CRN).
     Para una misma instancia (mismo ``seed``) todos los métodos ven escenarios
-    idénticos, independientemente de sus rutas."""
+    idénticos, independientemente de sus rutas.
+
+    ``vehicle_fixed_cost`` (homologación de flota): costo fijo por vehículo/ruta
+    usado, sumado de forma **uniforme** a todos los métodos. Internaliza el tradeoff
+    "factibilidad a cambio de más vehículos" en el costo comparable (un método que usa
+    12 rutas paga 12·c_fijo; uno que usa 4 paga 4·c_fijo) → igualdad de condiciones."""
     locations = np.asarray(instance.locations, dtype=np.float64)
     demands = np.asarray(instance.demands, dtype=np.float64)
     n = locations.shape[0]
@@ -334,6 +340,12 @@ def score_routes(
         feas[r] = 1.0 if res.feasible else 0.0
         cvrs[r] = (res.violations / n_customers) * 100.0
         twv[r] = res.tw_violations
+
+    # Homologación de flota: costo fijo por ruta usada (determinista, uniforme).
+    if vehicle_fixed_cost:
+        fleet_cost = sum(1 for rt in routes if len(rt) > 0) * float(vehicle_fixed_cost)
+        costs += fleet_cost
+        totals += fleet_cost
 
     return StochasticScore(
         expected_cost=float(costs.mean()),

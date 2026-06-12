@@ -169,6 +169,36 @@ necesita la **licencia académica gratuita** de Gurobi:
   (tardanza nominal en el MIP) valen 1.0 por defecto; `E[c+Q]` y CVaR escalan linealmente
   con `late_penalty` (hiperparámetro de modelado, reportar sensibilidad si se varía).
 
+## Homologación de condiciones (igualdad para los 4 paradigmas)
+
+Para que la comparación sea justa, **todos** los métodos compiten bajo condiciones
+idénticas. La igualdad se garantiza con una **re-puntuación unificada en el runner**:
+tras resolver, las rutas de cada solver se vuelven a puntuar con el mismo evaluador y
+los mismos parámetros, independientemente de la puntuación interna del solver.
+
+| Condición | Valor (igual para todos) |
+|---|---|
+| Instancias | la **misma lista** (mismos `seed` por instancia) |
+| Escenarios estocásticos ξ | **CRN**: `seed=metadata.seed` → ξ idéntico por realización |
+| Nº de realizaciones | `--realizations` (p. ej. 200) |
+| Capacidad / generación | `--capacity-mode` (binding) |
+| Tasa de accidentes | `--accident-scale` (1.0 fiel) |
+| Penalización de recurso | `--late-penalty` (1.0) |
+| Costo de flota | `--vehicle-cost` (uniforme; 0 = solo viaje) |
+| Métrica de evaluación | E[c], E[c+Q], CVaR, factibilidad, cvr, robustez, `n_vehicles` |
+
+**Flota:** los métodos cost-óptimos (exacto, NCO) usan pocos vehículos; las
+metaheurísticas alcanzan factibilidad usando muchas rutas cortas. Para no premiar
+"factibilidad vía más vehículos", `--vehicle-cost c` suma `c` por ruta usada de forma
+uniforme → internaliza el tradeoff en el costo comparable. Con `c=0` el costo es solo
+de viaje y la flota se reporta aparte (panel `n_vehicles`).
+
+**No homologable (inherente al paradigma, declarado):** (i) el *objetivo* que optimiza
+cada método difiere (el exacto/NCO minimizan tiempo nominal τ; las metaheurísticas su
+costo muestreado; todos se *evalúan* igual). (ii) Las NCO tienen un **costo de
+entrenamiento** amortizado que no entra en el `runtime` de inferencia (justamente la
+ventaja del paradigma). (iii) `exact-bc-tw` n=50 se salta por licencia.
+
 ## Validación y correcciones (transparencia)
 
 - **Defensa en profundidad (N6):** `exact-bc`/`exact-bc-tw` validan cada solución

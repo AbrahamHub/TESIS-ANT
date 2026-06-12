@@ -23,9 +23,32 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from . import io, viz, metrics, paradigms
+from . import io, viz, metrics, paradigms, stochastic
 from ._bootstrap import SVRP_ROOT, get_solver
 from . import solvers  # noqa: F401  (registra exact-bc, exact-bc-tw, aco, tabu)
+
+
+def _rescore_uniform(sol, inst, args):
+    """Re-puntúa las rutas de ``sol`` con el evaluador compartido bajo condiciones
+    idénticas para todos los métodos (homologación). Conserva del solver solo lo que
+    es propio de su mecánica (``runtime`` y extras como ``det_cost``/``gap``)."""
+    depot = int(inst.metadata.get("depot_index", 0))
+    sc = stochastic.score_routes(
+        inst, sol.routes, num_realizations=args.realizations,
+        seed=int(inst.metadata.get("seed", 0)), alpha=args.alpha,
+        late_penalty=args.late_penalty, accident_scale=args.accident_scale,
+        vehicle_fixed_cost=args.vehicle_cost, depot=depot,
+    )
+    extras = dict(sol.extras)
+    extras.update(sc.as_extras())
+    extras["n_routes"] = sum(1 for r in sol.routes if len(r) > 0)
+    sol.total_cost = sc.expected_cost
+    sol.feasibility = sc.feasibility
+    sol.cvr = sc.cvr
+    sol.waiting_time = sc.waiting_time
+    sol.robustness = sc.robustness
+    sol.extras = extras
+    return sol
 
 
 def _build_meta_solver(name, args):
@@ -78,6 +101,10 @@ def run(args) -> pd.DataFrame:
             except Exception as e:  # p.ej. límite de licencia Gurobi en n grande
                 print(f"    SALTADA: {str(e)[:120]}", flush=True)
                 continue
+            # HOMOLOGACIÓN: re-puntuación unificada de TODAS las rutas con condiciones
+            # idénticas (mismas instancias/escenarios ξ/realizaciones/penalizaciones/
+            # costo de flota), independiente de la puntuación interna de cada solver.
+            sol = _rescore_uniform(sol, inst, args)
             row = metrics.row_from_solution(sname, size, idx, sol)
             rows.append(row)
             per_instance.append({
@@ -144,6 +171,8 @@ def main() -> None:
                    dest="capacity_mode")
     p.add_argument("--meta-seeds", type=int, default=5, dest="meta_seeds",
                    help="semillas por instancia para las metaheurísticas (best-of-K + seed_std)")
+    p.add_argument("--vehicle-cost", type=float, default=0.0, dest="vehicle_cost",
+                   help="costo fijo por vehículo/ruta (homologa la flota en el costo comparable)")
     p.add_argument("--threads", type=int, default=0)
     p.add_argument("--seed", type=int, default=12345)
     p.add_argument("--verbose", action="store_true")
