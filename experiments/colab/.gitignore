@@ -1,0 +1,12 @@
+# Artefactos de corridas (por defecto van a Google Drive, no al repo). Si corres local
+# con root=cwd, estos se crean aquí y no deben versionarse.
+svrplab_runs/
+svrpbench/
+data/instances/
+data/models/
+results/
+*.npz
+*.pt
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
