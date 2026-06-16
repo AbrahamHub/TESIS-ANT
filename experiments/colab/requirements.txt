@@ -1,0 +1,17 @@
+# Pipeline EHBG-FACS sobre SVRPBench — dependencias (Colab / local).
+# En Colab, torch ya viene preinstalado con CUDA; aquí se fija un mínimo por si se
+# corre local. gurobipy solo lo necesita el paradigma 1 (Branch & Cut).
+
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+matplotlib>=3.7
+scikit-learn>=1.3      # primitivas de generación de instancias de SVRPBench (city.City)
+pillow>=9.0            # idem (city)
+tqdm>=4.65
+torch>=2.1            # paradigmas 3, 4, 5 (GPU)
+gurobipy>=11.0        # paradigma 1 (Branch & Cut); licencia restringida basta para n<=50
+
+# El paquete oficial SVRPBench NO se instala con pip: bootstrap.init() lo clona de
+#   https://github.com/yehias21/svrpbench
+# y lo agrega al sys.path.
