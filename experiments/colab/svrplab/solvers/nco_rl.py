@@ -31,7 +31,10 @@ from ..models import rollout as R
 
 def train_pomo(train_sizes=(10, 20), steps_per_size=1000, batch=64, embed_dim=128,
                n_heads=8, n_layers=3, lr=1e-4, entropy_coef=0.02, base_seed=88000,
-               device="cpu", verbose=True):
+               tw_penalty=0.0, device="cpu", verbose=True):
+    """``tw_penalty>0`` activa la recompensa consciente de ventanas: costo nominal +
+    tw_penalty × tardanza nominal (sigue siendo determinista — sin ξ —, pero la
+    política BUSCA satisfacer las ventanas en vez de ignorarlas)."""
     import torch
     torch.manual_seed(base_seed)
     model = T.AttentionModel(embed_dim=embed_dim, n_heads=n_heads, n_layers=n_layers).to(device)
@@ -46,8 +49,10 @@ def train_pomo(train_sizes=(10, 20), steps_per_size=1000, batch=64, embed_dim=12
             insts = [svrp_data.generate_instance(size, seed=int(rng.integers(1, 2**31)),
                                                  capacity_mode="binding") for _ in range(batch)]
             feat, demand, cap, tau = T.instance_tensors(insts, device)
+            tw = T.tw_tensors(insts, device) if tw_penalty > 0 else None
             with torch.amp.autocast("cuda", enabled=use_amp):
-                logp, cost, entropy = R.pomo_rollout(model, feat, demand, cap, tau, sample=True)
+                logp, cost, entropy = R.pomo_rollout(model, feat, demand, cap, tau,
+                                                     sample=True, tw=tw, tw_penalty=tw_penalty)
                 baseline = cost.mean(1, keepdim=True)                 # línea base compartida POMO
                 adv = (cost - baseline) / (cost.std(1, keepdim=True) + 1e-6)
                 loss = (adv.detach() * logp).mean() - entropy_coef * entropy.mean()
@@ -70,7 +75,7 @@ class NCOReinforce(Solver):
     def __init__(self, *, train_sizes=(10, 20), steps_per_size=1000, batch=64,
                  embed_dim=128, n_heads=8, n_layers=3, entropy_coef=0.02, device="cpu",
                  default_realizations=200, alpha=0.95, late_penalty=1.0, accident_scale=1.0,
-                 train_seed=88000, models_dir=None, cache=True, verbose=True):
+                 train_seed=88000, models_dir=None, cache=True, tw_penalty=0.0, verbose=True):
         self.train_sizes = tuple(train_sizes)
         self.steps_per_size = steps_per_size
         self.batch = batch
@@ -78,6 +83,7 @@ class NCOReinforce(Solver):
         self.n_heads = n_heads
         self.n_layers = n_layers
         self.entropy_coef = entropy_coef
+        self.tw_penalty = float(tw_penalty)
         self.device = device
         self.default_realizations = default_realizations
         self.alpha = alpha
@@ -93,7 +99,9 @@ class NCOReinforce(Solver):
 
     def _model_path(self) -> Path:
         sz = "-".join(str(s) for s in self.train_sizes)
-        return self.models_dir / f"nco_rl_pomo_am_n{sz}_s{self.steps_per_size}_b{self.batch}_h{self.embed_dim}.pt"
+        tw = f"_tw{self.tw_penalty:g}" if self.tw_penalty > 0 else ""
+        return self.models_dir / (f"nco_rl_pomo_am_n{sz}_s{self.steps_per_size}"
+                                  f"_b{self.batch}_h{self.embed_dim}{tw}.pt")
 
     def ensure_model(self):
         if self._model is not None:
@@ -112,8 +120,8 @@ class NCOReinforce(Solver):
         self._model, self.history = train_pomo(
             train_sizes=self.train_sizes, steps_per_size=self.steps_per_size, batch=self.batch,
             embed_dim=self.embed_dim, n_heads=self.n_heads, n_layers=self.n_layers,
-            entropy_coef=self.entropy_coef, base_seed=self.train_seed, device=self.device,
-            verbose=self.verbose)
+            entropy_coef=self.entropy_coef, base_seed=self.train_seed,
+            tw_penalty=self.tw_penalty, device=self.device, verbose=self.verbose)
         self._train_time = time.time() - t0
         if self.cache:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,8 +131,10 @@ class NCOReinforce(Solver):
         self.ensure_model()
         depot = int(instance.metadata.get("depot_index", 0))
         feat, demand, cap, tau = T.instance_tensors([instance], self.device)
+        tw = T.tw_tensors([instance], self.device) if self.tw_penalty > 0 else None
         t0 = time.time()
-        routes = R.greedy_decode(self._model, feat, demand, cap, tau, depot)[0]
+        routes = R.greedy_decode(self._model, feat, demand, cap, tau, depot,
+                                 tw=tw, tw_penalty=self.tw_penalty)[0]
         infer_time = time.time() - t0
 
         Rz = num_realizations if num_realizations and num_realizations > 1 else self.default_realizations
@@ -135,7 +145,9 @@ class NCOReinforce(Solver):
         extras = score.as_extras()
         extras.update({"n_routes": len(routes), "realizations": Rz, "train_time_s": self._train_time,
                        "method": "POMO-REINFORCE", "architecture": "AttentionModel",
-                       "train_sizes": list(self.train_sizes)})
+                       "train_sizes": list(self.train_sizes),
+                       "reward": ("nominal+TW" if self.tw_penalty > 0 else "nominal"),
+                       "tw_penalty": self.tw_penalty})
         return Solution(routes=routes, total_cost=score.expected_cost, runtime=infer_time,
                         feasibility=score.feasibility, cvr=score.cvr,
                         waiting_time=score.waiting_time, robustness=score.robustness, extras=extras)

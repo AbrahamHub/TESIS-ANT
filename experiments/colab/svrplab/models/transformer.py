@@ -190,6 +190,19 @@ def instance_tensors(instances, device):
             torch.as_tensor(tau, device=device))
 
 
+def tw_tensors(instances, device):
+    """Ventanas de tiempo (B, n, 2) en minutos para la recompensa consciente de TW;
+    nodos sin ventana → [0, 1440] (nunca penalizan)."""
+    import torch
+    out = []
+    for i in instances:
+        if i.time_windows is not None:
+            out.append(np.asarray(i.time_windows, np.float32))
+        else:
+            out.append(np.tile(np.array([0.0, 1440.0], np.float32), (i.num_nodes, 1)))
+    return torch.as_tensor(np.stack(out), device=device)
+
+
 def split_routes(seq, depot: int = 0):
     """Convierte una secuencia plana (con retornos al depósito) en lista de rutas."""
     routes, cur = [], []

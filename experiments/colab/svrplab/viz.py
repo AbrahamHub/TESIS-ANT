@@ -18,6 +18,26 @@ def _ensure(env, slug: str) -> Path:
     return d
 
 
+def figdir(env, slug: str) -> Path:
+    """Carpeta de figuras del paradigma (``figures/<slug>/``), creada si falta."""
+    return _ensure(env, slug)
+
+
+def save_show(fig, env, slug: str, name: str, *, dpi: int = 150, show: bool = True):
+    """Guarda ``fig`` en ``figures/<slug>/<name>.png`` (Drive si está montado) y la
+    deja abierta para que el notebook la muestre. Es el camino estándar de los
+    notebooks: toda figura mostrada queda también exportada."""
+    import matplotlib.pyplot as plt
+    if fig is None:
+        return None
+    path = _ensure(env, slug) / f"{name}.png"
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    print(f"[viz] figura -> {path}")
+    if show:
+        plt.show()
+    return path
+
+
 def plot_instance(inst, *, title: str = "", save: Optional[Path] = None):
     import matplotlib.pyplot as plt
     locs = np.asarray(inst.locations)

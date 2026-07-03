@@ -41,6 +41,7 @@ de la recompensa es una decisión de implementación documentada.
 """
 from __future__ import annotations
 
+import multiprocessing as mp
 import time
 from collections import deque
 from pathlib import Path
@@ -50,6 +51,7 @@ import numpy as np
 
 from vrp_bench.core import Instance, Solution, Solver
 from .. import stochastic, data as svrp_data
+from ..parallel import effective_jobs, process_map
 from ..models import transformer as T
 
 
@@ -205,42 +207,89 @@ def _ant_construct(pher, eta, demand, cap, customers, rng, alpha_aco, beta_aco):
     return seq
 
 
+# Contexto heredado por los workers fork del enjambre paralelo (solo numpy; los
+# escenarios ξ pre-muestreados pueden pesar GB a n grande y se comparten por
+# copy-on-write en vez de serializarse por tarea).
+_ANT_CTX: dict = {}
+
+
+def _ant_task(args):
+    it, k, pher = args
+    ctx = _ANT_CTX
+    rng = np.random.default_rng(np.random.SeedSequence([ctx["seed"], it, k]))
+    seq = _ant_construct(pher, ctx["eta"], ctx["demand"], ctx["cap"], ctx["customers"],
+                         rng, ctx["alpha_aco"], ctx["beta_aco"])
+    routes = T.split_routes(seq, 0)
+    sc = stochastic.score_routes(
+        ctx["instance"], routes, num_realizations=ctx["R"], seed=ctx["inst_seed"],
+        alpha=ctx["alpha_cvar"], late_penalty=ctx["late_penalty"],
+        accident_scale=ctx["accident_scale"], scenarios=ctx["scens"])
+    return seq, routes, sc
+
+
 def aco_search(eta, instance, *, n_ants=12, n_iters=8, alpha_aco=1.0, beta_aco=2.0,
                rho=0.1, Q=1.0, elite=3, aco_realizations=30, seed=0, late_penalty=1.0,
-               accident_scale=1.0, alpha_cvar=0.95):
+               accident_scale=1.0, alpha_cvar=0.95, n_jobs=1):
     """ACO guiado por η con feromona; puntúa cada hormiga con CVaR (CRN, R reducido).
     Devuelve (mejor_rutas, mejor_score, pool) donde ``pool`` = trayectorias elite para el
-    búfer de replay."""
+    búfer de replay.
+
+    Eficiencia (idéntica en resultados): los escenarios ξ se **pre-muestrean una vez**
+    (``presample_scenarios``) y se reutilizan para todas las hormigas (antes cada
+    puntuación re-muestreaba el mismo ruido CRN). Con ``n_jobs>1`` las hormigas de cada
+    iteración se construyen/puntúan en procesos fork paralelos ("enjambre estocástico
+    paralelo" del anteproyecto). Reproducibilidad: cada hormiga usa un RNG propio
+    derivado de ``SeedSequence([seed, iteración, hormiga])``, de modo que el resultado
+    es **independiente de n_jobs y del orden de ejecución**.
+    """
     n = eta.shape[0]
     demand = np.asarray(instance.demands, dtype=np.float64)
     cap = float(np.asarray(instance.vehicle_capacities, dtype=np.float64).ravel()[0])
     customers = [i for i in range(n) if i != 0]
-    rng = np.random.default_rng(seed)
     inst_seed = int(instance.metadata.get("seed", seed))
+
+    scens = stochastic.presample_scenarios(n, inst_seed, aco_realizations,
+                                           accident_scale=accident_scale)
+    _ANT_CTX.clear()
+    _ANT_CTX.update(dict(
+        eta=eta, demand=demand, cap=cap, customers=customers, seed=int(seed),
+        instance=instance, R=aco_realizations, inst_seed=inst_seed,
+        alpha_cvar=alpha_cvar, late_penalty=late_penalty,
+        accident_scale=accident_scale, alpha_aco=alpha_aco, beta_aco=beta_aco,
+        scens=scens))
+
+    jobs = effective_jobs(n_jobs)
+    use_pool = (jobs > 1 and n_ants > 1 and not mp.current_process().daemon
+                and "fork" in mp.get_all_start_methods())
+    ant_pool = (mp.get_context("fork").Pool(processes=min(jobs, n_ants))
+                if use_pool else None)
 
     pher = np.ones((n, n), dtype=np.float64)
     best_routes, best_score, best_cost = None, None, np.inf
     pool = []
-    for _ in range(n_iters):
-        ants = []
-        for _k in range(n_ants):
-            seq = _ant_construct(pher, eta, demand, cap, customers, rng, alpha_aco, beta_aco)
-            routes = T.split_routes(seq, 0)
-            sc = stochastic.score_routes(
-                instance, routes, num_realizations=aco_realizations, seed=inst_seed,
-                alpha=alpha_cvar, late_penalty=late_penalty, accident_scale=accident_scale)
-            cost = sc.cvar
-            ants.append((seq, routes, cost, sc))
-            if cost < best_cost:
-                best_cost, best_routes, best_score = cost, routes, sc
-        pher *= (1.0 - rho)                          # evaporación
-        for seq, routes, cost, sc in sorted(ants, key=lambda a: a[2])[:elite]:
-            dep = Q / (cost + 1e-9)
-            prev = 0
-            for node in seq:
-                pher[prev, node] += dep; pher[node, prev] += dep
-                prev = node
-            pool.append((seq, cost))
+    try:
+        for it in range(n_iters):
+            tasks = [(it, k, pher) for k in range(n_ants)]
+            ants_raw = ant_pool.map(_ant_task, tasks) if ant_pool else \
+                [_ant_task(t) for t in tasks]
+            ants = []
+            for seq, routes, sc in ants_raw:
+                cost = sc.cvar
+                ants.append((seq, routes, cost, sc))
+                if cost < best_cost:
+                    best_cost, best_routes, best_score = cost, routes, sc
+            pher *= (1.0 - rho)                          # evaporación
+            for seq, routes, cost, sc in sorted(ants, key=lambda a: a[2])[:elite]:
+                dep = Q / (cost + 1e-9)
+                prev = 0
+                for node in seq:
+                    pher[prev, node] += dep; pher[node, prev] += dep
+                    prev = node
+                pool.append((seq, cost))
+    finally:
+        if ant_pool is not None:
+            ant_pool.close(); ant_pool.join()
+        _ANT_CTX.clear()
     return best_routes, best_score, pool
 
 
@@ -258,16 +307,50 @@ def _eta_numpy(model, feat, device):
     return eta
 
 
+def _eta_numpy_batch(model, feat, device):
+    """Matrices heurísticas η (B,n,n) numpy del lote en UNA pasada GPU (antes se
+    codificaba instancia por instancia)."""
+    import torch
+    with torch.no_grad():
+        emb, _ = model.encode(feat)
+        return model.heuristic_matrix(emb).detach().cpu().numpy()
+
+
+def _cvar_task(args):
+    """Puntuación CRN de una construcción on-policy (worker fork, solo numpy)."""
+    inst, routes, R, alpha_cvar, late_penalty, accident_scale = args
+    sc = stochastic.score_routes(
+        inst, routes, num_realizations=R, seed=int(inst.metadata.get("seed", 0)),
+        alpha=alpha_cvar, late_penalty=late_penalty, accident_scale=accident_scale)
+    return sc.cvar
+
+
+def _refine_task(args):
+    """Refinamiento GFACS de una instancia del lote (worker fork; ACO secuencial
+    dentro del worker — el paralelismo va por instancia)."""
+    eta, inst, aco_realizations, late_penalty, accident_scale, alpha_cvar = args
+    _, _, pool = aco_search(
+        eta, inst, aco_realizations=aco_realizations,
+        seed=int(inst.metadata.get("seed", 0)), late_penalty=late_penalty,
+        accident_scale=accident_scale, alpha_cvar=alpha_cvar,
+        n_ants=8, n_iters=4, n_jobs=1)
+    return sorted(pool, key=lambda a: a[1])[:2]
+
+
 def train_ehbg_facs(train_sizes=(10, 20), n_train=64, epochs=40, embed_dim=128, n_heads=8,
                     n_layers=3, lr=1e-4, lam_db=0.5, temperature=2.0, batch=16,
                     aco_realizations=30, train_realizations=30, refine_every=5,
                     replay_ratio=0.5, buffer_size=8, epinet=False, base_seed=77000,
                     device="cpu", late_penalty=1.0, accident_scale=1.0, alpha_cvar=0.95,
-                    verbose=True):
+                    n_jobs=1, verbose=True):
     """Entrena la GFlowNet HBG con recompensa CVaR + refinamiento GFACS + replay off-policy.
 
     Banco de entrenamiento **fijo** (semillas disjuntas del banco de evaluación) para que
     el búfer de replay acumule trayectorias elite por instancia a lo largo de las épocas.
+
+    ``n_jobs``: procesos fork para las fases CPU entre pasos de GPU — la puntuación
+    CRN del lote on-policy y el refinamiento GFACS por instancia (los workers solo
+    usan numpy; la GPU queda para encode/backward).
     """
     import torch
     torch.manual_seed(base_seed)
@@ -301,33 +384,30 @@ def train_ehbg_facs(train_sizes=(10, 20), n_train=64, epochs=40, embed_dim=128, 
                 B = len(binsts)
                 epi_z = (torch.randn(B, model.epi_index_dim, device=device) if epinet else None)
 
-                # --- on-policy ---
+                # --- on-policy (puntuación CRN del lote en paralelo, CPU) ---
                 out = construct(model, feat, demand, cap, sample=True, epi_z=epi_z)
-                cvars = np.empty(B)
-                for b in range(B):
-                    routes = T.split_routes(out["seqs"][b], 0)
-                    sc = stochastic.score_routes(
-                        binsts[b], routes, num_realizations=train_realizations,
-                        seed=int(binsts[b].metadata.get("seed", 0)), alpha=alpha_cvar,
-                        late_penalty=late_penalty, accident_scale=accident_scale)
-                    cvars[b] = sc.cvar
+                cvars = np.asarray(process_map(
+                    _cvar_task,
+                    [(binsts[b], T.split_routes(out["seqs"][b], 0), train_realizations,
+                      alpha_cvar, late_penalty, accident_scale) for b in range(B)],
+                    n_jobs=n_jobs))
                 energy_scale[s] = 0.9 * energy_scale[s] + 0.1 * float(np.mean(cvars))
                 logR = torch.as_tensor(risk_logreward(cvars, energy_scale[s], temperature),
                                        dtype=torch.float32, device=device)
                 loss, l_tb, l_db = hbg_loss(out, logR, model.log_Z, lam_db, model.use_flow)
 
                 # --- GFACS refinement -> replay buffer (cada refine_every pasos) ---
+                # η del lote en UNA pasada GPU; refinamiento por instancia en paralelo.
                 if ep % refine_every == 0:
+                    etas = _eta_numpy_batch(model, feat, device)
+                    tops = process_map(
+                        _refine_task,
+                        [(etas[b], binsts[b], aco_realizations, late_penalty,
+                          accident_scale, alpha_cvar) for b in range(B)],
+                        n_jobs=n_jobs)
                     for b in range(B):
-                        eta = _eta_numpy(model, feat[b:b+1], device)
-                        _, _, pool = aco_search(
-                            eta, binsts[b], aco_realizations=aco_realizations,
-                            seed=int(binsts[b].metadata.get("seed", 0)),
-                            late_penalty=late_penalty, accident_scale=accident_scale,
-                            alpha_cvar=alpha_cvar, n_ants=8, n_iters=4)
-                        key = id(binsts[b])
-                        buf = buffer.setdefault(key, deque(maxlen=buffer_size))
-                        for seq, cost in sorted(pool, key=lambda a: a[1])[:2]:
+                        buf = buffer.setdefault(id(binsts[b]), deque(maxlen=buffer_size))
+                        for seq, cost in tops[b]:
                             buf.append((seq, cost))
 
                 # --- off-policy replay (TB/DB sobre trayectorias del búfer) ---
@@ -379,7 +459,7 @@ class EHBGFACS(Solver):
                  infer_ants=16, infer_iters=12, infer_realizations=40, alpha_aco=1.0,
                  beta_aco=2.0, rho=0.1, device="cpu", default_realizations=200, alpha=0.95,
                  late_penalty=1.0, accident_scale=1.0, train_seed=77000, models_dir=None,
-                 cache=True, verbose=True):
+                 cache=True, n_jobs=1, verbose=True):
         self.train_sizes = tuple(train_sizes)
         self.n_train = n_train
         self.epochs = epochs
@@ -407,6 +487,7 @@ class EHBGFACS(Solver):
         self.train_seed = train_seed
         self.models_dir = Path(models_dir) if models_dir else Path.cwd()
         self.cache = cache
+        self.n_jobs = n_jobs
         self.verbose = verbose
         self._model = None
         self._train_time = 0.0
@@ -442,7 +523,7 @@ class EHBGFACS(Solver):
             train_realizations=self.train_realizations, refine_every=self.refine_every,
             epinet=self.epinet, base_seed=self.train_seed, device=self.device,
             late_penalty=self.late_penalty, accident_scale=self.accident_scale,
-            alpha_cvar=self.alpha, verbose=self.verbose)
+            alpha_cvar=self.alpha, n_jobs=self.n_jobs, verbose=self.verbose)
         self._train_time = time.time() - t0
         if self.cache:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -459,7 +540,8 @@ class EHBGFACS(Solver):
             alpha_aco=self.alpha_aco, beta_aco=self.beta_aco, rho=self.rho,
             aco_realizations=self.infer_realizations,
             seed=int(instance.metadata.get("seed", 0)), late_penalty=self.late_penalty,
-            accident_scale=self.accident_scale, alpha_cvar=self.alpha)
+            accident_scale=self.accident_scale, alpha_cvar=self.alpha,
+            n_jobs=self.n_jobs)
         infer_time = time.time() - t0
         routes = routes or []
 

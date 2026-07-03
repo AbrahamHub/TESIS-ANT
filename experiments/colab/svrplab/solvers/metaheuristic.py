@@ -63,7 +63,7 @@ class _LegacyMetaheuristic(Solver):
         R = num_realizations if num_realizations and num_realizations > 1 else self.default_realizations
 
         legacy_dict = instance.to_legacy_dict()
-        runs = []
+        searches = []
         for k in range(self.n_seeds):
             s = (base_seed * 7919 + k * 104729) & 0x7FFFFFFF
             random.seed(s); np.random.seed(s)
@@ -73,10 +73,15 @@ class _LegacyMetaheuristic(Solver):
             res = legacy.solve_instance(0, num_realizations=1)
             rt = time.time() - t0
             routes = self._strip(res.get("routes", []), depot)
-            score = stochastic.score_routes(
-                instance, routes, num_realizations=R, seed=base_seed, alpha=self.alpha,
-                late_penalty=self.late_penalty, accident_scale=self.accident_scale, depot=depot)
-            runs.append((score, routes, rt, float(res.get("total_cost", float("nan")))))
+            searches.append((routes, rt, float(res.get("total_cost", float("nan")))))
+
+        # Puntuación CRN de las K corridas compartiendo el muestreo ξ por chunk
+        # (idéntico a puntuar una por una; el muestreo cuesta 1/K).
+        scores = stochastic.score_routes_multi(
+            instance, [r for r, _, _ in searches], num_realizations=R, seed=base_seed,
+            alpha=self.alpha, late_penalty=self.late_penalty,
+            accident_scale=self.accident_scale, depot=depot)
+        runs = [(sc, routes, rt, lc) for sc, (routes, rt, lc) in zip(scores, searches)]
 
         best = min(runs, key=lambda r: r[0].expected_total)
         best_score, best_routes, _, best_legacy = best

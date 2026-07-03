@@ -106,14 +106,36 @@ papers HBG/GFACS/ENN; las simplificaciones se documentan en `solvers/ehbg_facs.p
 
 ## Notas de escalabilidad
 
-- **Gurobi (P1):** la licencia restringida (`pip install gurobipy`) cubre n≤50 con la
-  formulación no dirigida. Para n>~63 (escala media del anteproyecto) usa la **licencia
-  académica gratuita** de Gurobi.
-- **`SIZES`:** por defecto `[10, 20, 50]` (comparación completa con el exacto en licencia
-  libre). Para la escala media del anteproyecto (50–300), extiende `SIZES` y usa licencia
-  académica para el exacto; los paradigmas neuronales escalan sin cambios.
-- **`N_INSTANCES`:** 30 por defecto (rigor para ANOVA/Wilcoxon). Para una primera corrida
-  rápida, baja a 5.
+- **Gurobi (P1):** la licencia restringida (`pip install gurobipy`) cubre `exact-bc`
+  (no dirigido) hasta n≈62 y `exact-bc-tw` (dirigido MTZ) hasta n≈42. El notebook 01
+  resuelve los sub-bancos `n ≤ EXACT_MAX_N` / `n ≤ TW_MAX_N` y **detecta automáticamente**
+  una licencia académica WLS si guardas `gurobi.lic` en Drive (`GRB_LICENSE_FILE`).
+- **Buscar satisfacer las restricciones + siempre generar ruta:** `exact-bc-tw` penaliza
+  la tardanza nominal en el objetivo (CVRPTW soft — las ventanas duras son casi
+  insatisfacibles por el caveat de escala del benchmark); ambos exactos arrancan de una
+  incumbente golosa NN+capacidad (**MIP start**) y caen a ella (`fallback=True`) si el
+  límite de tiempo expira sin incumbente — nunca devuelven vacío. `nco-rl` entrena con
+  **recompensa consciente de ventanas** (`tw_penalty`: costo nominal + tardanza nominal;
+  determinista, sin ξ) y `nco-sl` elige su multi-start por costo+tardanza en inferencia.
+  EHBG-FACS ya optimiza CVaR(c+Q), que internaliza las ventanas vía el recurso Q.
+- **`SIZES`:** por defecto `[10, 20, 50, 100, 200, 300]` (escala pequeña y media del
+  anteproyecto). El exacto se limita a `EXACT_MAX_N`; los demás paradigmas cubren todo.
+- **`N_INSTANCES`:** 5 por defecto (corrida exploratoria rápida). **Con 5 bloques el
+  Wilcoxon pareado no puede alcanzar p<0.05** (mínimo bilateral 0.0625): para las
+  conclusiones de la tesis usa 30. Las semillas por instancia dependen solo de
+  `(base_seed, tamaño, índice)`, así que el banco de 5 es un prefijo exacto del de 30.
+- **Paralelismo (`N_JOBS`/`n_jobs`):** las fases CPU (Gurobi, ACO/Tabu, evaluador CRN,
+  etiquetas del maestro, enjambre GFACS) se reparten en **procesos fork** (`svrplab.parallel`);
+  el GIL impide escalar con hilos y CUDA no es fork-safe, por lo que los solve de GPU quedan
+  secuenciales y solo se paraleliza su re-puntuación. En `aco_search` los escenarios ξ se
+  **pre-muestrean una vez por instancia** y se comparten entre hormigas (idéntico en
+  resultados, mucho más rápido a n grande); cada hormiga usa un RNG propio
+  `SeedSequence([seed, iteración, hormiga])`, de modo que el resultado no depende de
+  `n_jobs` ni del orden de ejecución. Las K corridas best-of-K de las metaheurísticas se
+  puntúan con `score_routes_multi` (muestreo ξ compartido por chunk: idéntico bit a bit,
+  costo de muestreo ÷K).
+- **Figuras:** toda figura mostrada en los notebooks se exporta también a
+  `figures/<paradigma>/` en Drive vía `viz.save_show`.
 
 ## Verificación local (sin GPU)
 

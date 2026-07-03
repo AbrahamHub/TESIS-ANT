@@ -28,6 +28,7 @@ import numpy as np
 
 from vrp_bench.core import Instance, Solution, Solver
 from .. import stochastic, data as svrp_data
+from ..parallel import process_map
 from ..models import transformer as T
 from ..models import rollout as R
 
@@ -65,18 +66,30 @@ def teacher_sequence(routes, locations, depot: int = 0) -> List[int]:
     return seq
 
 
-def _gen_labeled(train_sizes, n_per_size, base_seed, teacher_name, verbose=True):
+def _label_task(args):
+    """Resuelve una instancia con el maestro (worker fork, CPU: Gurobi o ACO)."""
+    teacher, inst = args
+    sol = teacher.solve(inst, num_realizations=1)
+    if not sol.routes:
+        return None
+    return (inst, T.node_features(inst), teacher_sequence(sol.routes, inst.locations))
+
+
+def _gen_labeled(train_sizes, n_per_size, base_seed, teacher_name, n_jobs=1, verbose=True):
+    """Genera el conjunto etiquetado. Las instancias se generan secuencialmente
+    (semillas deterministas); las resoluciones del maestro —la fase cara— se
+    reparten entre ``n_jobs`` procesos fork (cada solve siembra sus RNG desde la
+    instancia, así que el resultado no depende del orden ni del nº de procesos)."""
     teacher = _make_teacher(teacher_name)
-    data = []
+    insts = []
     k = 0
     for size in train_sizes:
         for _ in range(n_per_size):
-            inst = svrp_data.generate_instance(size, seed=base_seed + k, capacity_mode="binding")
+            insts.append(svrp_data.generate_instance(size, seed=base_seed + k,
+                                                     capacity_mode="binding"))
             k += 1
-            sol = teacher.solve(inst, num_realizations=1)
-            if not sol.routes:
-                continue
-            data.append((inst, T.node_features(inst), teacher_sequence(sol.routes, inst.locations)))
+    results = process_map(_label_task, [(teacher, inst) for inst in insts], n_jobs=n_jobs)
+    data = [r for r in results if r is not None]
     if verbose:
         print(f"[nco-sl] etiquetas ({teacher_name}): {len(data)} instancias, tamaños {list(train_sizes)}")
     return data
@@ -122,14 +135,15 @@ def _seq_loss(model, feat, demand, cap, target):
 
 def train_supervised(train_sizes=(10, 20), n_per_size=256, epochs=80, embed_dim=128,
                      n_heads=8, n_layers=3, lr=1e-4, batch_size=64, base_seed=99000,
-                     teacher="exact-bc", val_frac=0.1, device="cpu", verbose=True):
+                     teacher="exact-bc", val_frac=0.1, device="cpu", n_jobs=1, verbose=True):
     import torch
     from collections import defaultdict
     torch.manual_seed(base_seed)
     model = T.AttentionModel(embed_dim=embed_dim, n_heads=n_heads, n_layers=n_layers).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
 
-    data = _gen_labeled(train_sizes, n_per_size, base_seed, teacher, verbose)
+    data = _gen_labeled(train_sizes, n_per_size, base_seed, teacher,
+                        n_jobs=n_jobs, verbose=verbose)
     by_n = defaultdict(list)
     for d in data:
         by_n[d[0].num_nodes].append(d)
@@ -187,7 +201,7 @@ class NCOSupervised(Solver):
     def __init__(self, *, teacher: str = "exact-bc", train_sizes=(10, 20), n_per_size=256,
                  epochs=80, embed_dim=128, n_heads=8, n_layers=3, device="cpu",
                  default_realizations=200, alpha=0.95, late_penalty=1.0, accident_scale=1.0,
-                 train_seed=99000, models_dir=None, cache=True, verbose=True):
+                 train_seed=99000, models_dir=None, cache=True, n_jobs=1, verbose=True):
         self.teacher = teacher
         self.train_sizes = tuple(train_sizes)
         self.n_per_size = n_per_size
@@ -203,6 +217,7 @@ class NCOSupervised(Solver):
         self.train_seed = train_seed
         self.models_dir = Path(models_dir) if models_dir else Path.cwd()
         self.cache = cache
+        self.n_jobs = n_jobs
         self.verbose = verbose
         self._model = None
         self._train_time = 0.0
@@ -231,7 +246,7 @@ class NCOSupervised(Solver):
             train_sizes=self.train_sizes, n_per_size=self.n_per_size, epochs=self.epochs,
             embed_dim=self.embed_dim, n_heads=self.n_heads, n_layers=self.n_layers,
             base_seed=self.train_seed, teacher=self.teacher, device=self.device,
-            verbose=self.verbose)
+            n_jobs=self.n_jobs, verbose=self.verbose)
         self._train_time = time.time() - t0
         if self.cache:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,8 +257,13 @@ class NCOSupervised(Solver):
         self.ensure_model()
         depot = int(instance.metadata.get("depot_index", 0))
         feat, demand, cap, tau = T.instance_tensors([instance], self.device)
+        # Selección multi-start consciente de ventanas: entre los n-1 inicios se elige
+        # por costo nominal + tardanza (busca satisfacer restricciones en inferencia,
+        # sin alterar la imitación del maestro).
+        tw = T.tw_tensors([instance], self.device)
         t0 = time.time()
-        routes = R.greedy_decode(self._model, feat, demand, cap, tau, depot)[0]
+        routes = R.greedy_decode(self._model, feat, demand, cap, tau, depot,
+                                 tw=tw, tw_penalty=self.late_penalty)[0]
         infer_time = time.time() - t0
 
         Rz = num_realizations if num_realizations and num_realizations > 1 else self.default_realizations

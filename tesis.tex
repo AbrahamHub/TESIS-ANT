@@ -1,0 +1,674 @@
+% ============================================================
+%  TESIS — UANL / FIME
+%  Abraham Castaneda Quintero
+%  Muestreo Híbrido mediante Redes de Flujo Generativo
+%  y Optimización por Colonia de Hormigas para el Problema
+%  de Enrutamiento de Vehículos Estocástico (EHBG-FACS)
+%
+%  ESQUELETO derivado 100% del diseño de anteproyecto.tex:
+%   - mismo preámbulo/portada/colores institucionales;
+%   - capítulos mapeados 1:1 a las secciones del anteproyecto
+%     (antecedentes → marco teórico; fases 1–5 → caps. 3–6;
+%      hipótesis/objetivos/contribuciones → cap. 1 y 7);
+%   - el temario de literatura del cap. 2 cubre exactamente los
+%     temas y las 14 referencias del anteproyecto.
+%  Los huecos por redactar están marcados con \pendiente{...}.
+%  Compilar con: pdflatex + biber + pdflatex ×2 (Overleaf: biber).
+% ============================================================
+
+\documentclass[12pt]{report}
+
+% ── Paquetes (idénticos al anteproyecto) ────────────────────
+\usepackage[spanish,es-noquoting,es-noshorthands]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage{fontenc}
+\usepackage{csquotes}           % requerido por biblatex con babel
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{tocloft}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{tikz}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{array}
+\usepackage{letterspace}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{colortbl}
+\usepackage[backend=biber,style=ieee,sorting=none]{biblatex}
+\usepackage{hyperref}
+
+% ── Bibliografía (misma base que el anteproyecto) ────────────
+\addbibresource{referencias.bib}
+
+% ── Página y tipografía ─────────────────────────────────────
+\geometry{letterpaper, margin=1in}
+\setlength{\parindent}{1.25cm}
+\onehalfspacing
+\setlength{\emergencystretch}{3em}
+
+% ── Colores institucionales UANL ────────────────────────────
+\definecolor{uanlblue}{RGB}{0,56,101}
+\definecolor{uanlgold}{RGB}{200,155,40}
+\definecolor{lightbg}{RGB}{245,246,248}
+\definecolor{rowgray}{RGB}{235,237,240}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = uanlblue,
+  citecolor  = uanlblue,
+  urlcolor   = uanlblue
+}
+
+% ── Marcador de secciones por redactar ───────────────────────
+\newcommand{\pendiente}[1]{\par\noindent\colorbox{lightbg}{%
+  \begin{minipage}{0.94\linewidth}\small
+  \textcolor{uanlgold}{\textbf{[POR REDACTAR]}} #1
+  \end{minipage}}\par\medskip}
+
+% ════════════════════════════════════════════════════════════
+\begin{document}
+
+% ── PORTADA (mismo diseño del anteproyecto) ─────────────────
+\begin{titlepage}
+\pagecolor{white}
+
+\begin{tikzpicture}[remember picture,overlay]
+  \fill[uanlblue] (current page.north west)
+      rectangle ++(\paperwidth,-1.2cm);
+  \fill[uanlgold] ([yshift=-1.2cm]current page.north west)
+      rectangle ++(\paperwidth,-0.22cm);
+  \fill[uanlgold] (current page.south west)
+      rectangle ++(\paperwidth,0.22cm);
+  \fill[uanlblue] ([yshift=0.22cm]current page.south west)
+      rectangle ++(\paperwidth,1.2cm);
+\end{tikzpicture}
+
+\vspace*{0.5cm}
+
+\begin{center}
+
+{\fontsize{15.5}{19}\selectfont\bfseries\textcolor{uanlblue}{%
+  UNIVERSIDAD AUT\'ONOMA DE NUEVO LE\'ON}}\\[0.3cm]
+{\fontsize{11.5}{14}\selectfont\textsc{\textcolor{uanlblue}{%
+  Facultad de Ingenier\'ia Mec\'anica y El\'ectrica}}}
+
+\vspace{0.6cm}
+{\color{uanlgold}\rule{0.55\textwidth}{1.6pt}}
+\vspace{0.8cm}
+
+{\fontsize{13.0}{18}\selectfont\bfseries\textcolor{uanlblue}{%
+  MUESTREO H\'IBRIDO MEDIANTE REDES DE FLUJO\\[0.2cm]
+  GENERATIVO Y OPTIMIZACI\'ON POR COLONIA DE\\[0.2cm]
+  HORMIGAS PARA EL PROBLEMA DE ENRUTAMIENTO\\[0.2cm]
+  DE VEH\'ICULOS ESTOC\'ASTICO}}
+
+\vspace{0.8cm}
+{\color{uanlgold}\rule{0.55\textwidth}{1.6pt}}
+\vspace{1.0cm}
+
+{\fontsize{16}{20}\selectfont\bfseries\textcolor{uanlblue}{%
+  T\,E\,S\,I\,S}}
+
+\vspace{0.2cm}
+{\fontsize{11}{14}\selectfont\textit{Para obtener el t\'itulo de:}}\\[0.45cm]
+{\fontsize{13.5}{17}\selectfont\bfseries\textit{%
+  Ingeniero en Tecnolog\'ias de Software}}
+
+\vspace{0.5cm}
+
+\colorbox{lightbg}{%
+  \begin{minipage}{0.68\textwidth}
+    \vspace{0.5cm}
+    \centering
+    {\small\textit{\textcolor{uanlblue}{Presenta:}}}\\[0.3cm]
+    {\fontsize{14}{17}\selectfont\bfseries Abraham Casta\~neda Quintero}\\[0.5cm]
+    {\color{uanlgold}\rule{0.7\linewidth}{0.8pt}}\\[0.4cm]
+    {\small\textit{\textcolor{uanlblue}{Director de Tesis:}}}\\[0.3cm]
+    {\fontsize{12}{15}\selectfont\bfseries Dr. Jos\'e Arturo Berrones Santos}\\[0.5cm]
+    \vspace{0.5cm}
+  \end{minipage}%
+}
+
+\end{center}
+
+\vfill
+
+\begin{center}
+  {\small\textcolor{uanlblue}{San Nicol\'as de los Garza, Nuevo Le\'on%
+  \enspace\textbullet\enspace 2026}}
+\end{center}
+
+\vspace{1.4cm}
+\end{titlepage}
+
+% ════════════════════════════════════════════════════════════
+% PRELIMINARES (paginación romana)
+% ════════════════════════════════════════════════════════════
+\pagenumbering{roman}
+
+% ── Hoja de aprobación ───────────────────────────────────────
+\chapter*{Hoja de Aprobaci\'on}
+\addcontentsline{toc}{chapter}{Hoja de Aprobaci\'on}
+\pendiente{Insertar la hoja de aprobaci\'on oficial de la FIME con las firmas
+del comit\'e (director, revisores) conforme al formato institucional vigente.}
+
+% ── Dedicatoria y agradecimientos ────────────────────────────
+\chapter*{Agradecimientos}
+\addcontentsline{toc}{chapter}{Agradecimientos}
+\pendiente{Agradecimientos (director de tesis, comit\'e, familia, instituciones).}
+
+% ── Resumen / Abstract ───────────────────────────────────────
+\chapter*{Resumen}
+\addcontentsline{toc}{chapter}{Resumen}
+\pendiente{Resumen en espa\~nol (1 p\'agina): problema (fragilidad de la NCO
+determinista ante la estocasticidad urbana), propuesta (EHBG-FACS: GFlowNet de
+Balance H\'ibrido + muestreador GFACS + recompensa CVaR, extensi\'on ENN),
+m\'etodo (benchmark \texttt{SVRPBench}, protocolo homologado con CRN, validaci\'on
+estad\'istica) y hallazgos principales con su significancia.}
+
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+\pendiente{Traducci\'on fiel del resumen al ingl\'es.}
+
+% ── Índices ──────────────────────────────────────────────────
+\tableofcontents
+\newpage
+\listoffigures
+\addcontentsline{toc}{chapter}{\'Indice de figuras}
+\newpage
+\listoftables
+\addcontentsline{toc}{chapter}{\'Indice de cuadros}
+\newpage
+
+% ── Lista de acrónimos ───────────────────────────────────────
+\chapter*{Lista de Acr\'onimos}
+\addcontentsline{toc}{chapter}{Lista de Acr\'onimos}
+\begin{tabular}{>{\bfseries\color{uanlblue}}p{3.2cm}p{11.5cm}}
+VRP        & \textit{Vehicle Routing Problem} (Problema de Enrutamiento de Veh\'iculos)\\
+SVRP       & \textit{Stochastic VRP} (VRP Estoc\'astico)\\
+CVRP(TW)   & VRP con capacidad (y ventanas de tiempo)\\
+ACO        & \textit{Ant Colony Optimization} (Optimizaci\'on por Colonia de Hormigas)\\
+NCO        & Optimizaci\'on Combinatoria Neuronal\\
+RL         & \textit{Reinforcement Learning} (Aprendizaje por Refuerzo)\\
+AM         & \textit{Attention Model}\\
+POMO       & \textit{Policy Optimization with Multiple Optima}\\
+GFlowNet   & \textit{Generative Flow Network} (Red de Flujo Generativo)\\
+TB / DB    & \textit{Trajectory Balance} / \textit{Detailed Balance}\\
+HBG        & \textit{Hybrid-Balance GFlowNet}\\
+GFACS      & \textit{Generative Flow Ant Colony Sampler}\\
+ENN        & \textit{Epistemic Neural Network} (Red Neuronal Epist\'emica)\\
+EHBG-FACS  & \textit{Epistemic} HBG-FACS (marco propuesto)\\
+CVaR       & \textit{Conditional Value-at-Risk} (Valor en Riesgo Condicional)\\
+CRN        & \textit{Common Random Numbers} (N\'umeros Aleatorios Comunes)\\
+B\&C       & \textit{Branch-and-Cut} (Ramificaci\'on y Cortes)\\
+MTZ        & Formulaci\'on Miller--Tucker--Zemlin\\
+\end{tabular}
+
+% ════════════════════════════════════════════════════════════
+% CUERPO (paginación arábiga)
+% ════════════════════════════════════════════════════════════
+\newpage
+\pagenumbering{arabic}
+
+% ────────────────────────────────────────────────────────────
+\chapter{Introducci\'on}\label{cap:intro}
+% Mapea: "Antecedentes" (¶ inicial), "Definición del Problema",
+% "Hipótesis", "Objetivos" y "Contribución" del anteproyecto.
+% ────────────────────────────────────────────────────────────
+
+\section{Motivaci\'on y contexto}\label{sec:motivacion}
+\pendiente{Redactar a partir del primer bloque de los Antecedentes del
+anteproyecto: relevancia industrial del VRP (cadenas de suministro, \'ultima
+milla), su NP-dureza~\cite{Lenstra1981Complexity} y la incompatibilidad del
+modelo determinista con la log\'istica urbana real~\cite{Heakl2025SVRP}.}
+
+\section{Planteamiento del problema}\label{sec:problema}
+\pendiente{Trasladar la ``Definici\'on del Problema de Investigaci\'on'': la
+segmentaci\'on tecnol\'ogica entre la NCO determinista (eficiente pero fr\'agil
+ante desplazamientos distribucionales) y las GFlowNets (ricas en diversidad y
+riesgo, sin validaci\'on en entornos log\'isticos estoc\'asticos de alta
+fidelidad).}
+
+\section{Pregunta de investigaci\'on}\label{sec:pregunta}
+\begin{center}
+  \colorbox{lightbg}{%
+    \begin{minipage}{0.85\textwidth}
+      \vspace{0.4cm}
+      \centering
+      \textit{\guillemotleft\textquestiondown Es posible mejorar de forma
+      estad\'isticamente significativa la robustez y viabilidad t\'actica de
+      soluciones para el problema de ruteo estoc\'astico mediante un marco
+      h\'ibrido que combine el muestreo adaptativo de una red neuronal
+      Hybrid-Balance GFlowNet con el refinamiento poblacional de colonias de
+      hormigas estoc\'asticas?\guillemotright}
+      \vspace{0.4cm}
+    \end{minipage}%
+  }
+\end{center}
+\pendiente{Definir operacionalmente ``robustez'' (tasa de factibilidad, costo
+esperado con recurso $E[c+Q]$ y $\mathrm{CVaR}_\alpha$) y ``viabilidad
+t\'actica'' (cumplimiento de restricciones bajo $\xi$ con tiempos de inferencia
+competitivos).}
+
+\section{Hip\'otesis}\label{sec:hipotesis}
+
+\subsection*{Hip\'otesis general}
+La integraci\'on arquitect\'onica de una Red de Flujo Generativo con Balance
+H\'ibrido (HBG) y cuantificaci\'on de incertidumbre epist\'emica (ENN) como
+parametrizador a priori dentro de un enjambre estoc\'astico paralelo (ACO),
+entrenada bajo la infraestructura desacoplada de \texttt{RL4CO}, producir\'a un
+motor de b\'usqueda combinatorio neuronal capaz de superar estad\'isticamente en
+robustez (tasa de factibilidad y costo esperado bajo ruido log-normal y
+disrupciones de Poisson) a los m\'etodos neuronales deterministas (POMO, AM) y a
+las heur\'isticas industriales convencionales en el marco de simulaci\'on
+\texttt{SVRPBench}, manteniendo tiempos de inferencia competitivos frente a
+dichas heur\'isticas.
+
+\subsection*{Hip\'otesis espec\'ificas}
+\begin{enumerate}[label=\textbf{H\arabic*.},leftmargin=1.5cm,itemsep=0.5em]
+  \item La incorporaci\'on expl\'icita de la penalizaci\'on de Balance Detallado
+  (DB) junto al Balance de Trayectoria (TB) mitigar\'a los picos de p\'erdida
+  asint\'oticos en espacios complejos, mejorando la convergencia en instancias
+  con ventanas de tiempo r\'igidas.
+  \item La retroalimentaci\'on as\'incrona de trayectorias estoc\'asticas desde
+  el motor de Colonia de Hormigas hacia el b\'ufer fuera de pol\'itica de la
+  GFlowNet incrementar\'a la diversidad del hiperespacio de soluciones generado,
+  limitando el colapso de modo.
+  \item La cuantificaci\'on activa de la incertidumbre epist\'emica mediante
+  Redes Neuronales Epist\'emicas guiar\'a el muestreo hacia regiones poco
+  exploradas del espacio de soluciones, incrementando la diversidad de rutas
+  candidatas factibles y, en sinergia con el refinamiento poblacional del ACO,
+  facilitando la identificaci\'on de rutas de recurso resilientes frente a los
+  retrasos log-normales y las disrupciones de Poisson.
+\end{enumerate}
+\pendiente{A\~nadir la m\'etrica operacional de cada hip\'otesis (H1:
+estabilidad/percentiles de la p\'erdida y \'epocas-a-umbral; H2: m\'etrica
+expl\'icita de diversidad de las top-$k$ rutas; H3: correlaci\'on entre se\~nal
+epist\'emica y cobertura de subgrafos), conforme a la hoja de ruta de
+revisi\'on del anteproyecto.}
+
+\section{Objetivos}\label{sec:objetivos}
+
+\subsection*{Objetivo general}
+Desarrollar y validar un marco algor\'itmico h\'ibrido que acople una Red de
+Flujo Generativo de Balance H\'ibrido (HBG) con un muestreador de Colonia de
+Hormigas (\textit{Generative Flow Ant Colony Sampler}, GFACS) ---n\'ucleo
+denominado HBG-FACS--- para la optimizaci\'on robusta del Problema de
+Enrutamiento de Veh\'iculos Estoc\'astico de escala peque\~na y media, simulado
+en alta fidelidad mediante \texttt{SVRPBench}. Como extensi\'on exploratoria se
+incorporar\'a un m\'odulo de incertidumbre epist\'emica (ENN), configurando el
+marco completo \textit{Epistemic} HBG-FACS (EHBG-FACS), y se evaluar\'a la
+escalabilidad a instancias de mayor tama\~no.
+
+\subsection*{Objetivos espec\'ificos}
+\begin{enumerate}[label=\textbf{OE\arabic*.},leftmargin=1.8cm,itemsep=0.5em]
+  \item Integrar el marco \texttt{SVRPBench} dentro de la librer\'ia modular
+  \texttt{RL4CO}, automatizando la generaci\'on de instancias urbanas din\'amicas
+  de escala peque\~na y media (50 a 300 nodos).
+  \item Dise\~nar e implementar en PyTorch una arquitectura
+  codificador-decodificador basada en Transformers, parametrizada como una
+  GFlowNet de Balance H\'ibrido (HBG).
+  \item Acoplar la pol\'itica estoc\'astica de la GFlowNet con el muestreador
+  metaheur\'istico de Colonia de Hormigas (GFACS) y un b\'ufer fuera de
+  pol\'itica, conformando el n\'ucleo HBG-FACS.
+  \item Cuantificar emp\'iricamente el desempe\~no del modelo en calidad de
+  soluci\'on (brecha de optimalidad y costo esperado), tasa de factibilidad y
+  tiempos de inferencia, frente a m\'etodos del estado del arte (POMO, AM y
+  heur\'isticas cl\'asicas), con validaci\'on estad\'istica.
+  \item \textit{(Exploratorio)} Incorporar el m\'odulo epist\'emico (ENN) para
+  guiar la exploraci\'on y evaluar la escalabilidad del marco a configuraciones
+  multi-dep\'osito y de gran escala ($>500$ nodos), seg\'un la disponibilidad de
+  tiempo y c\'omputo.
+\end{enumerate}
+
+\section{Contribuciones}\label{sec:contribuciones}
+\begin{enumerate}[label=\textbf{C\arabic*.},leftmargin=1.5cm,itemsep=0.5em]
+  \item \textbf{Fundamentaci\'on de un Paradigma H\'ibrido Estoc\'astico:}
+  formalizaci\'on documentada del acoplamiento HBG--GFACS para el ruteo
+  estoc\'astico de alta fidelidad y su unificaci\'on con redes epist\'emicas
+  (ENN)~\cite{Zhang2025Hybrid, ENN_GFN_2025}.
+  \item \textbf{Integraci\'on As\'incrona de Redes Profundas y
+  Metaheur\'isticas:} validaci\'on emp\'irica del uso de distribuciones
+  neuronales probabil\'isticas completas para inicializar b\'usquedas
+  descentralizadas masivamente paralelas (ACO) en entornos de tr\'afico
+  din\'amicos.
+  \item \textbf{Liberaci\'on de un Framework Reproducible de Ruteo Tolerante a
+  Fallos:} ecosistema \texttt{EHBG-FACS} sobre la estructura desacoplada de
+  \texttt{RL4CO}, depositado en repositorio de c\'odigo
+  abierto~\cite{Berto2023RL4CO}.
+\end{enumerate}
+
+\section{Alcance y limitaciones}\label{sec:alcance}
+\pendiente{Declarar: dep\'osito \'unico; escalas comprometidas 50--300 nodos
+(multi-dep\'osito y $>500$ nodos solo exploratorio); ventanas de tiempo tratadas
+como restricciones \emph{soft} v\'ia recurso de segunda etapa (caveat de escala
+de \texttt{SVRPBench}); l\'imites de licencia de Gurobi para los baselines
+exactos; presupuesto de c\'omputo (GPU Colab).}
+
+\section{Estructura de la tesis}\label{sec:estructura}
+\pendiente{P\'arrafo-gu\'ia: cap.~\ref{cap:marco} marco te\'orico;
+cap.~\ref{cap:metodologia} formulaci\'on y metodolog\'ia;
+cap.~\ref{cap:experimental} dise\~no experimental; cap.~\ref{cap:resultados}
+resultados; cap.~\ref{cap:enn} extensi\'on epist\'emica;
+cap.~\ref{cap:conclusiones} conclusiones.}
+
+% ────────────────────────────────────────────────────────────
+\chapter{Marco Te\'orico y Estado del Arte}\label{cap:marco}
+% TEMARIO DE LITERATURA — cobertura derivada 100% del anteproyecto:
+% cada sección corresponde a un bloque de los "Antecedentes", "La
+% Barrera de la Estocasticidad" y "El Surgimiento de las GFlowNets".
+% ────────────────────────────────────────────────────────────
+
+\section{El Problema de Enrutamiento de Veh\'iculos}\label{sec:vrp}
+\pendiente{Cubrir: definici\'on formal del VRP y variantes relevantes (CVRP,
+VRPTW); restricciones de capacidad, ventanas de tiempo y jornada; complejidad
+computacional y pertenencia a NP-duro~\cite{Lenstra1981Complexity}; panorama de
+los tres paradigmas hist\'oricos de soluci\'on (Cuadro~\ref{tab:paradigmas}).}
+
+\begin{table}[ht]
+\centering
+\caption{Paradigmas de Optimizaci\'on para el Enrutamiento de Veh\'iculos}
+\label{tab:paradigmas}
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{5pt}
+\small
+\begin{tabular}{>{\bfseries\color{uanlblue}}p{3.5cm}
+                >{\raggedright\arraybackslash}p{4.2cm}
+                >{\raggedright\arraybackslash}p{4.2cm}
+                >{\centering\arraybackslash}p{3.1cm}}
+\toprule
+\rowcolor{uanlblue}
+{\color{white}\textbf{Paradigma}} &
+{\color{white}\textbf{Ventaja Principal}} &
+{\color{white}\textbf{Desventaja Cr\'itica}} &
+{\color{white}\textbf{Escalabilidad}} \\
+\midrule
+M\'etodos Exactos (Branch \& Cut) & Garantizan el \'optimo global con certeza matem\'atica. & Intratabilidad temporal por explosi\'on combinatoria. & Muy Baja ($< 100$ nodos) \\
+\rowcolor{rowgray}
+Metaheur\'isticas Cl\'asicas (ACO, Tabu) & Soluciones de alta calidad sin entrenamiento previo. & Requieren ejecuci\'on desde cero; dise\~no manual. & Moderada ($100$ - $1000$ nodos) \\
+NCO supervisada & Inferencia r\'apida tras el entrenamiento. & Dependencia total de datos etiquetados caros. & Baja (Limitada por datos) \\
+\rowcolor{rowgray}
+NCO por RL determinista (POMO, AM) & Inferencia en milisegundos; entrenamiento sin etiquetas. & Fragilidad extrema ante estocasticidad; colapso de modos. & Alta ($> 1000$ nodos en entornos est\'aticos) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{M\'etodos exactos}\label{sec:exactos}
+\pendiente{Cubrir: ramificaci\'on y acotaci\'on (\textit{branch-and-bound});
+planos de corte y \textit{branch-and-cut}; desigualdades de capacidad
+redondeada/eliminaci\'on de subtours (RCI/DFJ) como restricciones perezosas;
+formulaciones de flujo (no dirigida de dos \'indices) y MTZ con ventanas;
+programaci\'on din\'amica; el l\'imite pr\'actico de escala ($<100$ nodos) que
+motiva el resto de paradigmas.}
+
+\section{Metaheur\'isticas cl\'asicas}\label{sec:metaheuristicas}
+\pendiente{Cubrir: Recocido Simulado, B\'usqueda Tab\'u, Algoritmos Gen\'eticos
+(panor\'amica); \textbf{ACO en detalle}~\cite{Dorigo1996AntSystem}: regla de
+transici\'on $\tau^{\alpha}\cdot\eta^{\beta}$, evaporaci\'on y dep\'osito de
+feromona $Q/L$, Ant System y variantes; limitaciones estructurales: dise\~no
+manual de reglas, calibraci\'on artesanal de hiperpar\'ametros y ejecuci\'on
+desde cero por instancia (imposibilidad de amortizaci\'on).}
+
+\section{Optimizaci\'on Combinatoria Neuronal}\label{sec:nco}
+\pendiente{Cubrir: motivaci\'on de la NCO (reemplazar heur\'isticas manuales por
+redes parametrizadas); \textit{Pointer Networks} y aprendizaje supervisado con
+su cuello de botella de etiquetas; el giro al RL (REINFORCE, actor-cr\'itico);
+el \textit{Attention Model} codificador-decodificador~\cite{Kool2019Attention};
+\textbf{POMO}~\cite{Kwon2020POMO}: explotaci\'on de simetr\'ias, m\'ultiples
+trayectorias con inicios distintos y l\'inea base compartida de bajo
+sesgo/varianza; el ecosistema \texttt{RL4CO} como infraestructura experimental
+est\'andar~\cite{Berto2023RL4CO}.}
+
+\section{Ruteo estoc\'astico y medidas de riesgo}\label{sec:svrp}
+\pendiente{Cubrir: formulaci\'on del SVRP (velocidades, tiempos de servicio y
+demandas como variables aleatorias); \textbf{programaci\'on estoc\'astica en dos
+etapas con recurso}~\cite{Gendreau1996Stochastic}: ruta \emph{a priori},
+escenario $\xi$, pol\'itica de recurso y costo $c+Q$; medidas de riesgo para
+colas pesadas: VaR y \textbf{CVaR}~\cite{Rockafellar2000CVaR}, y por qu\'e el
+costo esperado es insuficiente ante disrupciones de cola.}
+
+\section{El marco \texttt{SVRPBench}}\label{sec:svrpbench}
+\pendiente{Cubrir~\cite{Heakl2025SVRP}: los cuatro vectores estoc\'asticos
+(congesti\'on por mezclas gaussianas dependiente del tiempo; retrasos
+log-normales de cola pesada; disrupciones por procesos de Poisson; ventanas
+heterog\'eneas residencial/comercial); el hallazgo central: degradaci\'on
+$>20\%$ de los modelos NCO deterministas ante desplazamientos distribucionales
+(precisar m\'etrica y condici\'on del resultado), y el colapso de modos como
+mecanismo; baselines incluidos en el benchmark (OR-Tools, LKH, metaheur\'isticas
+oficiales).}
+
+\section{Redes de Flujo Generativo}\label{sec:gfn}
+\pendiente{Cubrir: fundamentos de GFlowNets~\cite{Bengio2023Foundations}:
+DAG de construcci\'on $\mathcal{G}=(\mathcal{V},\mathcal{E})$, estados
+parciales/terminales, conservaci\'on de flujo, pol\'iticas $P_F$/$P_B$ y la
+propiedad de muestreo $P_T(x)\propto R(x)$ (en el punto fijo del objetivo);
+diferencia conceptual con RL de maximizaci\'on.}
+
+Para entrenar estas pol\'iticas, el objetivo de Balance de Trayectoria
+(TB)~\cite{Malkin2022Trajectory} optimiza a lo largo de una trayectoria completa
+$\tau = (s_0 \to \dots \to s_n)$:
+\begin{equation}
+\mathcal{L}_{TB}(\tau; \theta) = \left( \log \frac{Z_\theta \prod_{t=0}^{n-1} P_F(s_{t+1}|s_t; \theta)}{\prod_{t=0}^{n-1} P_B(s_t|s_{t+1}; \theta) R(s_n)} \right)^2
+\label{eq:tb}
+\end{equation}
+mientras que el principio de Balance Detallado (DB) opera a nivel de
+transici\'on at\'omica:
+\begin{equation}
+\mathcal{L}_{DB}(s, s'; \theta) = \left( \log \frac{F_\theta(s) P_F(s'|s; \theta)}{F_\theta(s') P_B(s|s'; \theta)} \right)^2
+\label{eq:db}
+\end{equation}
+
+\subsection{Balance H\'ibrido (HBG)}\label{sec:hbg}
+\pendiente{Cubrir~\cite{Zhang2025Hybrid}: inestabilidades locales del TB
+hol\'istico en ruteo; reintroducci\'on del DB y su combinaci\'on adaptativa
+(ponderador $\lambda_{DB}$); resultados reportados en VRP.}
+
+\subsection{Muestreo con colonias de hormigas (GFACS)}\label{sec:gfacs}
+\pendiente{Cubrir~\cite{Kim2024GFACS}: GFlowNet como generador de la matriz
+heur\'istica a priori $\eta$ de un ACO; refinamiento poblacional; posici\'on
+frente a DeepACO/heur\'isticas neuronales de aristas.}
+
+\subsection{Incertidumbre epist\'emica (ENN)}\label{sec:enn}
+\pendiente{Cubrir~\cite{ENN_GFN_2025}: redes neuronales epist\'emicas y el
+esquema \textit{epinet} (cabezas indexadas con cuerpo compartido); su uso para
+guiar exploraci\'on en GFlowNets hacia regiones poco visitadas.}
+
+\section{S\'intesis y brecha de investigaci\'on}\label{sec:brecha}
+\pendiente{Cerrar el cap\'itulo con la segmentaci\'on tecnol\'ogica del
+anteproyecto: NCO determinista = eficiencia sin robustez; GFlowNets = diversidad
+y riesgo sin validaci\'on log\'istica de alta fidelidad; el nicho vac\'io que
+EHBG-FACS ocupa y c\'omo cada componente de la propuesta responde a una
+limitaci\'on documentada en las secciones previas.}
+
+% ────────────────────────────────────────────────────────────
+\chapter{Formulaci\'on del Problema y Metodolog\'ia}\label{cap:metodologia}
+% Mapea las Fases 1–3 del anteproyecto.
+% ────────────────────────────────────────────────────────────
+
+\section{Formulaci\'on: SVRP en dos etapas con recurso}\label{sec:formulacion}
+\pendiente{Formalizar (Fase 1): decisi\'on \emph{a priori}; escenario
+$\xi$ (congesti\'on, retrasos log-normales, accidentes de Poisson); pol\'itica
+de recurso y costo total $c(\text{ruta}) + Q(\text{ruta},\xi)$ estimado por
+Monte Carlo~\cite{Gendreau1996Stochastic}; recompensa sensible al riesgo
+$R(x)\propto\exp(-\mathrm{CVaR}_\alpha(c+Q)/T)$~\cite{Rockafellar2000CVaR}.}
+
+\section{Ecosistema experimental}\label{sec:ecosistema}
+\pendiente{Describir (Fase 1): \texttt{SVRPBench}~\cite{Heakl2025SVRP} sobre
+\texttt{RL4CO}~\cite{Berto2023RL4CO}; banco can\'onico de instancias con
+semillas fijas (dep\'osito \'unico, escalas 50--300); generaci\'on de los cuatro
+vectores estoc\'asticos; n\'umero de realizaciones Monte Carlo por instancia y
+uso de N\'umeros Aleatorios Comunes (CRN) para comparabilidad.}
+
+\section{Arquitectura neuronal HBG}\label{sec:arquitectura}
+\pendiente{Describir (Fase 2): codificador \textit{Graph Transformer} con
+caracter\'isticas est\'aticas y de varianza temporal; decodificador que
+parametriza $P_F$, $P_B$, el flujo $F_\theta(s)$ y $\log Z$; p\'erdida h\'ibrida
+$\mathcal{L}_{HBG} = (1-\lambda_{DB})\,\mathcal{L}_{TB} +
+\lambda_{DB}\,\mathcal{L}_{DB}$ (ecs.~\ref{eq:tb} y~\ref{eq:db})
+~\cite{Zhang2025Hybrid}; detalles de entrenamiento (AdamW, precisi\'on mixta).}
+
+\section{Acoplamiento GFACS y b\'ufer fuera de pol\'itica}\label{sec:acoplamiento}
+\pendiente{Describir (Fase 3): siembra de la matriz heur\'istica $\eta$ con la
+pol\'itica $P_F$~\cite{Kim2024GFACS}; enjambres con iteraciones estoc\'asticas;
+actualizaci\'on de feromona por robustez (CVaR); b\'ufer de repetici\'on
+off-policy que retroalimenta trayectorias \'elite al entrenamiento HBG;
+pseudoc\'odigo del n\'ucleo HBG-FACS.}
+
+\section{Extensi\'on epist\'emica (ENN)}\label{sec:met-enn}
+\pendiente{Describir (Fase 5, dise\~no): transformaci\'on de la capa final en
+\textit{epinet} con cabezas indexadas~\cite{ENN_GFN_2025} y el mecanismo por el
+que la incertidumbre epist\'emica gu\'ia el muestreo. La evaluaci\'on emp\'irica
+se reporta en el cap.~\ref{cap:enn}.}
+
+% ────────────────────────────────────────────────────────────
+\chapter{Dise\~no Experimental}\label{cap:experimental}
+% Mapea la Fase 4 del anteproyecto.
+% ────────────────────────────────────────────────────────────
+
+\section{Protocolo homologado}\label{sec:protocolo}
+\pendiente{Condiciones id\'enticas para todos los m\'etodos: mismas instancias
+(semillas fijas), mismos escenarios $\xi$ (CRN), misma re-puntuaci\'on con el
+evaluador estoc\'astico compartido, misma pol\'itica de recurso y mismo costo de
+flota; declarar presupuestos de entrenamiento/inferencia por m\'etodo.}
+
+\section{L\'ineas base}\label{sec:baselines}
+\pendiente{Describir cada baseline y su rol: exactos Branch \& Cut (cota de
+costo y variante con ventanas soft); metaheur\'isticas oficiales ACO y
+Tab\'u~\cite{Dorigo1996AntSystem}; NCO supervisada (Attention Model por
+imitaci\'on); NCO por RL determinista POMO+AM~\cite{Kwon2020POMO,
+Kool2019Attention}; heur\'isticas del benchmark~\cite{Heakl2025SVRP}.}
+
+\section{M\'etricas de evaluaci\'on}\label{sec:metricas}
+\pendiente{Definir: brecha de optimalidad y costo determinista; $E[c]$,
+$E[c+Q]$, $\mathrm{CVaR}_\alpha$; tasa de factibilidad y tasa de violaci\'on;
+robustez (dispersi\'on entre realizaciones); tiempos de inferencia y costo de
+entrenamiento amortizado; tama\~no de flota.}
+
+\section{Sintonizaci\'on de hiperpar\'ametros}\label{sec:optuna}
+Los hiperpar\'ametros cr\'iticos se sintonizan con Optuna~\cite{Akiba2019Optuna}
+sobre el espacio del Cuadro~\ref{tab:espacio}.
+
+\begin{table}[ht]
+\centering
+\caption{Espacio de b\'usqueda de hiperpar\'ametros del sistema EHBG-FACS}
+\label{tab:espacio}
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{6pt}
+\small
+\begin{tabular}{>{\bfseries\color{uanlblue}}p{4.6cm}
+                >{\raggedright\arraybackslash}p{4.2cm}
+                >{\centering\arraybackslash}p{3.2cm}}
+\toprule
+\rowcolor{uanlblue}
+{\color{white}\textbf{Hiperpar\'ametro Sist\'emico}} &
+{\color{white}\textbf{Espacio de B\'usqueda}} &
+{\color{white}\textbf{M\'odulo Impactado}} \\
+\midrule
+Coeficiente HBG ($\lambda_{DB}$) & Uniforme: $[0.1,\,0.9]$ & Ponderaci\'on de p\'erdida TB vs. DB \\
+\rowcolor{rowgray}
+Tasa de Evaporaci\'on ($\rho$) & Log-Uniforme: $[10^{-3},\,10^{-1}]$ & Din\'amica de feromonas en ACO \\
+Temperatura de Flujo ($T$) & Uniforme: $[0.5,\,5.0]$ & Suavizado de la pol\'itica $P_F$ \\
+\rowcolor{rowgray}
+Tasa de Aprendizaje AdamW & Log-Uniforme: $[10^{-5},\,10^{-3}]$ & Codificador-decodificador Transformer \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{An\'alisis estad\'istico}\label{sec:estadistica}
+\pendiente{Plan de la Fase 4: verificaci\'on de supuestos (Shapiro--Wilk,
+Levene); ANOVA con $\alpha=0.05$ cuando se cumplen; Friedman + post-hoc de
+Wilcoxon pareado con correcci\'on de Holm cuando no (colas pesadas); dise\~no de
+bloques por instancia (v\'alido gracias al CRN); n\'umero de instancias por
+tama\~no ($\geq 30$) y reporte de tama\~nos del efecto.}
+
+\section{Estudios de ablaci\'on}\label{sec:ablaciones}
+\pendiente{Dise\~no de atribuci\'on (hoja de ruta de revisi\'on del
+anteproyecto): (a) AM/POMO con recompensa penalizada por ventanas (a\'isla el
+efecto del objetivo); (b) GFlowNet con TB puro vs.\ HBG (a\'isla H1); (c)
+HBG sin refinamiento GFACS (a\'isla H2); (d) ACO guiado por CVaR sin prior
+neuronal (a\'isla el aporte de la red); (e) EHBG-FACS con y sin ENN (a\'isla
+H3).}
+
+% ────────────────────────────────────────────────────────────
+\chapter{Resultados y Discusi\'on}\label{cap:resultados}
+% ────────────────────────────────────────────────────────────
+
+\section{Calidad de soluci\'on y costo esperado}\label{sec:res-costo}
+\pendiente{Tablas/figuras por tama\~no: brecha vs.\ exacto, $E[c]$, $E[c+Q]$.}
+
+\section{Robustez ante la estocasticidad}\label{sec:res-robustez}
+\pendiente{$\mathrm{CVaR}_\alpha$, tasa de factibilidad, violaciones; el
+\emph{tradeoff} costo--factibilidad--flota y la regi\'on ideal.}
+
+\section{Tiempos de c\'omputo}\label{sec:res-tiempos}
+\pendiente{Inferencia por m\'etodo y costo de entrenamiento amortizado;
+comparativa frente a heur\'isticas (hip\'otesis general, cl\'ausula de
+tiempos).}
+
+\section{Contraste de hip\'otesis}\label{sec:res-hipotesis}
+\pendiente{Resultados de las pruebas estad\'isticas y de las ablaciones,
+organizados por H1, H2, H3 y la hip\'otesis general; efectos y significancia.}
+
+\section{Discusi\'on}\label{sec:discusion}
+\pendiente{Lectura frente a la literatura del cap.~\ref{cap:marco}: ¿confirman
+los resultados la degradaci\'on de la NCO determinista~\cite{Heakl2025SVRP}?
+¿aporta el balance h\'ibrido la estabilidad reportada por~\cite{Zhang2025Hybrid}?
+¿reproduce GFACS el beneficio de~\cite{Kim2024GFACS} bajo estocasticidad?
+Limitaciones y amenazas a la validez.}
+
+% ────────────────────────────────────────────────────────────
+\chapter{Extensi\'on Epist\'emica y Escalabilidad}\label{cap:enn}
+% Mapea la Fase 5 (exploratoria) del anteproyecto.
+% ────────────────────────────────────────────────────────────
+
+\section{EHBG-FACS con ENN}\label{sec:enn-resultados}
+\pendiente{Comparativa HBG-FACS vs.\ EHBG-FACS-ENN: diversidad explorada,
+factibilidad y CVaR (H3)~\cite{ENN_GFN_2025}.}
+
+\section{Escalabilidad}\label{sec:escalabilidad}
+\pendiente{Comportamiento a $>500$ nodos y configuraciones multi-dep\'osito;
+costo computacional; l\'imites observados.}
+
+% ────────────────────────────────────────────────────────────
+\chapter{Conclusiones y Trabajo Futuro}\label{cap:conclusiones}
+% ────────────────────────────────────────────────────────────
+
+\section{Conclusiones}\label{sec:conclusiones}
+\pendiente{Una conclusi\'on por objetivo espec\'ifico (OE1--OE5) y el veredicto
+sobre la pregunta de investigaci\'on y la hip\'otesis general.}
+
+\section{Contribuciones alcanzadas}\label{sec:contrib-finales}
+\pendiente{Estado final de C1--C3 (formalizaci\'on, validaci\'on emp\'irica,
+repositorio liberado).}
+
+\section{Trabajo futuro}\label{sec:futuro}
+\pendiente{L\'ineas derivadas: multi-dep\'osito y gran escala como programa
+completo; recurso de segunda etapa aprendido; despliegue en datos reales de
+tr\'afico.}
+
+% ────────────────────────────────────────────────────────────
+\appendix
+
+\chapter{Marco Reproducible}\label{ap:reproducible}
+\pendiente{Estructura del repositorio (\texttt{experiments/colab}: notebooks
+00--06, paquete \texttt{svrplab}); instrucciones de ejecuci\'on en Colab/GPU;
+semillas y protocolo homologado (C3).}
+
+\chapter{Detalles del Banco de Instancias}\label{ap:instancias}
+\pendiente{Par\'ametros de generaci\'on (tama\~nos, demandas, capacidad,
+ventanas residencial/comercial); semillas por instancia; formato de
+persistencia.}
+
+\chapter{Configuraci\'on Experimental Completa}\label{ap:config}
+\pendiente{Hiperpar\'ametros finales por m\'etodo; hardware utilizado (GPU/vCPU);
+versiones de software; licencias (Gurobi acad\'emica WLS).}
+
+% ────────────────────────────────────────────────────────────
+\printbibliography[title={Bibliograf\'ia}]
+\addcontentsline{toc}{chapter}{Bibliograf\'ia}
+
+\end{document}

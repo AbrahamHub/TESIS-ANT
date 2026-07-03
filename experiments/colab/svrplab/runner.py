@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from . import metrics, stochastic
+from .parallel import effective_jobs, process_map
 from .protocol import PARADIGM_OF, Protocol
 
 
@@ -40,9 +41,28 @@ def _rescore(sol, inst, proto: Protocol):
     return sol, sc
 
 
+def _solve_task(args):
+    """Tarea por instancia para el pool fork (solvers CPU): solve + re-puntuación en
+    el worker. Los solvers CPU siembran sus RNG desde la instancia dentro de
+    ``solve``, así que el resultado es idéntico al secuencial."""
+    solver, inst, proto, rescore = args
+    t0 = time.time()
+    sol = solver.solve(inst, num_realizations=proto.realizations)
+    wall = time.time() - t0
+    sc = None
+    if rescore:
+        sol, sc = _rescore(sol, inst, proto)
+    return sol, sc, wall
+
+
+def _rescore_task(args):
+    inst, sol, proto = args
+    return _rescore(sol, inst, proto)
+
+
 def run_solver(solver, solver_name: str, bank: dict, env, proto: Protocol, *,
                rescore: bool = True, save: bool = True, verbose: bool = True,
-               cost_samples: bool = False) -> pd.DataFrame:
+               cost_samples: bool = False, n_jobs: int = 1) -> pd.DataFrame:
     """Ejecuta ``solver`` (instancia ya construida) sobre todo el ``bank``.
 
     Parámetros
@@ -54,20 +74,45 @@ def run_solver(solver, solver_name: str, bank: dict, env, proto: Protocol, *,
     proto : ``Protocol`` con las condiciones homologadas.
     rescore : re-puntuar con el evaluador compartido (recomendado siempre True).
     cost_samples : si True, guarda las muestras de costo por instancia (para CVaR/plots).
+    n_jobs : procesos paralelos (fork) para las fases CPU. Con solvers CPU
+        (exact/aco/tabu) paraleliza solve+re-puntuación por instancia; con solvers
+        GPU (``solver.device == 'cuda'``) el solve queda secuencial (CUDA no es
+        fork-safe) y solo se paraleliza la re-puntuación CRN. -1 = nº de CPUs.
     """
     paradigm, slug = PARADIGM_OF.get(solver_name, (0, "cross"))
     rows: List[Dict] = []
     samples: Dict[str, np.ndarray] = {}
+    jobs = effective_jobs(n_jobs)
+    gpu_solver = getattr(solver, "device", "cpu") == "cuda"
 
     pairs = [(s, i, inst) for s in sorted(bank) for i, inst in enumerate(bank[s])]
-    for s, i, inst in pairs:
-        t0 = time.time()
-        sol = solver.solve(inst, num_realizations=proto.realizations)
-        wall = time.time() - t0
-        if rescore:
-            sol, sc = _rescore(sol, inst, proto)
-            if cost_samples:
-                samples[f"{s}:{i}"] = sc.total_samples
+
+    if jobs > 1 and not gpu_solver:
+        results = process_map(_solve_task,
+                              [(solver, inst, proto, rescore) for _, _, inst in pairs],
+                              n_jobs=jobs)
+    else:
+        # Solve secuencial (obligatorio para GPU); re-puntuación en paralelo aparte.
+        solved = []
+        for s, i, inst in pairs:
+            t0 = time.time()
+            sol = solver.solve(inst, num_realizations=proto.realizations)
+            solved.append((sol, time.time() - t0))
+        if rescore and jobs > 1:
+            scored = process_map(_rescore_task,
+                                 [(inst, sol, proto) for (_, _, inst), (sol, _) in zip(pairs, solved)],
+                                 n_jobs=jobs)
+            results = [(sol_sc[0], sol_sc[1], wall)
+                       for sol_sc, (_, wall) in zip(scored, solved)]
+        elif rescore:
+            results = [(*_rescore(sol, inst, proto), wall)
+                       for (_, _, inst), (sol, wall) in zip(pairs, solved)]
+        else:
+            results = [(sol, None, wall) for sol, wall in solved]
+
+    for (s, i, inst), (sol, sc, wall) in zip(pairs, results):
+        if cost_samples and sc is not None:
+            samples[f"{s}:{i}"] = sc.total_samples
         seed = int(inst.metadata.get("seed", 0))
         row = metrics.row_from_solution(solver_name, paradigm, s, i, seed, sol)
         rows.append(row)

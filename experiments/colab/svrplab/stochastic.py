@@ -135,6 +135,28 @@ def sample_scenario(n: int, base_seed: int, r: int, n_buckets: int = 24,
     return Scenario(z=z, acc_delay=acc_delay, n_buckets=B)
 
 
+def presample_scenarios(n: int, base_seed: int, num_realizations: int, *,
+                        n_buckets: int = 24, accident_scale: float = 1.0) -> List["Scenario"]:
+    """Pre-muestrea la lista completa de escenarios ξ (r = 0..R−1) de una instancia.
+
+    Idéntico bit a bit a lo que ``score_routes`` muestrearía internamente: sirve
+    como **cache CRN** cuando se puntúan muchas rutas de la MISMA instancia (p. ej.
+    las hormigas del GFACS), evitando re-muestrear el mismo ruido cientos de veces.
+    Memoria: ~``2·n²·n_buckets·8`` bytes por realización (≈35 MB a n=300, B=24).
+    """
+    return [sample_scenario(n, base_seed, r, n_buckets=n_buckets,
+                            accident_scale=accident_scale)
+            for r in range(num_realizations)]
+
+
+def _memory_capped_chunk(n: int, n_buckets: int, chunk: int,
+                         budget_bytes: float = 4e8) -> int:
+    """Acota el nº de escenarios apilados a la vez para que el ruido (z + acc_delay)
+    no exceda ~``budget_bytes`` (evita picos de GB a n=200–300 en Colab)."""
+    per_scen = 2 * n * n * n_buckets * 8
+    return max(2, min(int(chunk), max(1, int(budget_bytes // max(1, per_scen)))))
+
+
 def _bucket(t: float, B: int) -> int:
     return int((t % _DAY) // (_DAY / B))
 
@@ -405,6 +427,7 @@ def score_routes(
     n_buckets: int = 24,
     vectorized: bool = True,
     chunk: int = 32,
+    scenarios: List[Scenario] = None,
 ) -> StochasticScore:
     """Puntúa ``routes`` sobre ``num_realizations`` escenarios CRN.
 
@@ -415,20 +438,29 @@ def score_routes(
     forma uniforme a todos los métodos (internaliza "factibilidad a cambio de flota").
 
     ``vectorized`` simula las realizaciones en paralelo (idéntico al bucle, más rápido);
-    ``chunk`` acota la memoria del apilado del ruido a ``chunk`` realizaciones a la vez.
+    ``chunk`` acota la memoria del apilado del ruido (se recorta además de forma
+    adaptativa con el tamaño de la instancia, ver ``_memory_capped_chunk``).
+
+    ``scenarios``: cache CRN opcional producido por ``presample_scenarios(n, seed, R)``
+    **con los mismos parámetros**; evita re-muestrear ξ al puntuar muchas rutas de la
+    misma instancia. El resultado es idéntico bit a bit al muestreo interno.
     """
     n, dist, demands, caps, tw, appear, customers = _prepare(instance, depot)
     n_customers = max(1, len(customers))
     R = int(num_realizations)
+    if scenarios is not None and len(scenarios) < R:
+        raise ValueError(f"scenarios tiene {len(scenarios)} realizaciones < R={R}")
 
     costs = np.empty(R); totals = np.empty(R); waits = np.empty(R)
     feas = np.empty(R); cvrs = np.empty(R); twv = np.empty(R)
 
     if vectorized:
+        chunk = _memory_capped_chunk(n, n_buckets, chunk)
         for lo in range(0, R, chunk):
             hi = min(R, lo + chunk)
-            scens = [sample_scenario(n, seed, r, n_buckets=n_buckets,
-                                     accident_scale=accident_scale) for r in range(lo, hi)]
+            scens = (scenarios[lo:hi] if scenarios is not None else
+                     [sample_scenario(n, seed, r, n_buckets=n_buckets,
+                                      accident_scale=accident_scale) for r in range(lo, hi)])
             c, w, rec, tv, fe, vio = _simulate_vectorized(
                 routes, depot, dist, demands, caps, tw, appear, customers,
                 late_penalty, scens)
@@ -440,7 +472,8 @@ def score_routes(
             twv[lo:hi] = tv
     else:
         for r in range(R):
-            scen = sample_scenario(n, seed, r, n_buckets=n_buckets, accident_scale=accident_scale)
+            scen = (scenarios[r] if scenarios is not None else
+                    sample_scenario(n, seed, r, n_buckets=n_buckets, accident_scale=accident_scale))
             res = _simulate(routes, depot, dist, demands, caps, tw, appear, customers,
                             late_penalty, scen)
             costs[r] = res.travel_cost
@@ -468,3 +501,73 @@ def score_routes(
         cost_samples=costs,
         total_samples=totals,
     )
+
+
+def score_routes_multi(
+    instance,
+    routes_list: List[List[List[int]]],
+    *,
+    num_realizations: int = 200,
+    seed: int = 0,
+    alpha: float = 0.95,
+    late_penalty: float = 1.0,
+    accident_scale: float = 1.0,
+    vehicle_fixed_cost: float = 0.0,
+    depot: int = 0,
+    n_buckets: int = 24,
+    chunk: int = 32,
+) -> List[StochasticScore]:
+    """Puntúa VARIAS soluciones de la MISMA instancia compartiendo el muestreo ξ.
+
+    Idéntico (bit a bit) a llamar ``score_routes`` una vez por solución, pero el
+    escenario de cada chunk se muestrea **una sola vez** y se reutiliza para las K
+    soluciones — el muestreo (que domina a n grande) cuesta 1/K. Uso típico: las
+    ``n_seeds`` corridas best-of-K de las metaheurísticas.
+    """
+    n, dist, demands, caps, tw, appear, customers = _prepare(instance, depot)
+    n_customers = max(1, len(customers))
+    R = int(num_realizations)
+    K = len(routes_list)
+
+    acc = [dict(costs=np.empty(R), totals=np.empty(R), waits=np.empty(R),
+                feas=np.empty(R), cvrs=np.empty(R), twv=np.empty(R)) for _ in range(K)]
+
+    chunk = _memory_capped_chunk(n, n_buckets, chunk)
+    for lo in range(0, R, chunk):
+        hi = min(R, lo + chunk)
+        scens = [sample_scenario(n, seed, r, n_buckets=n_buckets,
+                                 accident_scale=accident_scale) for r in range(lo, hi)]
+        for k, routes in enumerate(routes_list):
+            c, w, rec, tv, fe, vio = _simulate_vectorized(
+                routes, depot, dist, demands, caps, tw, appear, customers,
+                late_penalty, scens)
+            a = acc[k]
+            a["costs"][lo:hi] = c
+            a["totals"][lo:hi] = c + rec
+            a["waits"][lo:hi] = w
+            a["feas"][lo:hi] = fe.astype(np.float64)
+            a["cvrs"][lo:hi] = (vio / n_customers) * 100.0
+            a["twv"][lo:hi] = tv
+
+    out = []
+    for k, routes in enumerate(routes_list):
+        a = acc[k]
+        costs, totals = a["costs"], a["totals"]
+        if vehicle_fixed_cost:
+            fleet = sum(1 for rt in routes if len(rt) > 0) * float(vehicle_fixed_cost)
+            costs = costs + fleet
+            totals = totals + fleet
+        out.append(StochasticScore(
+            expected_cost=float(costs.mean()),
+            expected_total=float(totals.mean()),
+            cvar=cvar(totals, alpha),
+            feasibility=float(a["feas"].mean()),
+            cvr=float(a["cvrs"].mean()),
+            waiting_time=float(a["waits"].mean()),
+            robustness=float(costs.std()),
+            tw_violations=float(a["twv"].mean()),
+            alpha=alpha,
+            cost_samples=costs,
+            total_samples=totals,
+        ))
+    return out
