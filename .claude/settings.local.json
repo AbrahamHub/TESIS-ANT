@@ -21,8 +21,11 @@
       "Bash(mv \"[5] POMO Policy Optimization with Multiple Optima for Reinforcement Learning.pdf\" \"[4] POMO Policy Optimization with Multiple Optima for Reinforcement Learning.pdf\")",
       "Bash(mv \"[6] RL4CO An Extensive Reinforcement Learning for Combinatorial Optimization Benchmark.pdf\" \"[5] RL4CO An Extensive Reinforcement Learning for Combinatorial Optimization Benchmark.pdf\")",
       "Bash(mv \"[10]  A Next-generation Hyperparameter Optimization Framework.pdf\" \"[11] Optuna A Next-generation Hyperparameter Optimization Framework.pdf\")",
-      "Bash(sort -t'[' -k2 -n)"
-      
+      "Bash(sort -t'[' -k2 -n)",
+      "Bash(mdls -name kMDItemNumberOfPages \"/Users/abrahamcastanedaquintero/tmp/TESIS-ANT/Referencias/[1] SVRPBench A Realistic Benchmark for Stochastic Vehicle Routing Problem.pdf\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 scripts/build_notebooks.py)",
+      "Bash(PYTHONPATH=. ../svrp/.venv/bin/python /private/tmp/claude-501/-Users-abrahamcastanedaquintero-tmp-TESIS-ANT/1837327e-af9f-4ffc-acfc-534fd5de8dc1/scratchpad/test_round3.py ../svrp/third_party/svrpbench)"
     ]
   }
 }

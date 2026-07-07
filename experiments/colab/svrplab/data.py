@@ -196,6 +196,29 @@ def load_bank(data_dir, sizes: List[int], n_instances: int, *,
                       capacity_mode=capacity_mode, verbose=verbose)
 
 
+def bank_fingerprint(bank: dict) -> str:
+    """Huella determinista del banco: hash de los pares ``(tamaño, seed)`` de
+    todas las instancias. Dos notebooks con la misma huella resolvieron
+    EXACTAMENTE el mismo banco (auditoría del piso parejo en el notebook 06)."""
+    import hashlib
+    pairs = sorted((int(s), int(inst.metadata.get("seed", -1)))
+                   for s in bank for inst in bank[s])
+    raw = ";".join(f"{s}:{seed}" for s, seed in pairs)
+    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+
+def size_fingerprints(bank: dict) -> dict:
+    """Huella POR TAMAÑO (``{size: hash}``). Permite auditar el piso parejo
+    aunque un solver haya corrido solo un subconjunto de tamaños (p. ej. los
+    exactos limitados por licencia): basta comparar los tamaños compartidos."""
+    import hashlib
+    out = {}
+    for s in bank:
+        seeds = ";".join(str(int(i.metadata.get("seed", -1))) for i in bank[s])
+        out[int(s)] = hashlib.sha1(seeds.encode()).hexdigest()[:12]
+    return out
+
+
 def bank_as_pairs(bank: dict) -> List[Tuple[int, object]]:
     """Aplana ``{size: [inst,...]}`` a ``[(size, inst), ...]`` (orden por tamaño)."""
     out = []

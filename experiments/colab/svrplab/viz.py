@@ -185,6 +185,139 @@ def plot_tradeoff(df, *, size: int, save: Optional[Path] = None):
     return fig
 
 
+def _flatten_visit_order(routes: List[List[int]], depot: int) -> List[int]:
+    """Secuencia de visita (con retornos al depósito) implicada por las rutas."""
+    seq: List[int] = []
+    for r in routes:
+        if r:
+            seq.extend(int(c) for c in r)
+            seq.append(depot)
+    return seq
+
+
+def plot_route_progression(inst, routes: List[List[int]], *, n_frames: int = 6,
+                           title: str = "", save: Optional[Path] = None):
+    """Progresión paso a paso de la solución: ``n_frames`` paneles que dibujan
+    el recorrido acumulado (misma representación para TODOS los métodos, lo que
+    hace la comparación visual justa: se compara la solución, no el estilo del
+    trazado). El panel final es la solución completa."""
+    import matplotlib.pyplot as plt
+    locs = np.asarray(inst.locations)
+    depot = int(inst.metadata.get("depot_index", 0))
+    seq = _flatten_visit_order(routes, depot)
+    total = len(seq)
+    if total == 0:
+        return None
+    cmap = plt.get_cmap("tab10")
+    cols = min(3, n_frames)
+    rows = (n_frames + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.6 * rows))
+    axes = np.atleast_1d(axes).ravel()
+    cuts = [max(1, round(total * (k + 1) / n_frames)) for k in range(n_frames)]
+    for ax_i, (ax, cut) in enumerate(zip(axes, cuts)):
+        ax.scatter(locs[1:, 0], locs[1:, 1], c="0.75", s=14, zorder=2)
+        ax.scatter([locs[depot, 0]], [locs[depot, 1]], marker="s", c="red",
+                   s=70, zorder=4)
+        # dibuja los tramos completados hasta `cut`
+        route_idx, prev = 0, depot
+        for stp in range(cut):
+            node = seq[stp]
+            ax.plot(locs[[prev, node], 0], locs[[prev, node], 1], "-",
+                    color=cmap(route_idx % 10), lw=1.1, zorder=3)
+            if node == depot:
+                route_idx += 1
+                prev = depot
+            else:
+                ax.scatter([locs[node, 0]], [locs[node, 1]], s=22,
+                           color=cmap(route_idx % 10), zorder=3)
+                prev = node
+        if cut < total:                       # posición actual
+            cur = seq[cut - 1] if seq[cut - 1] != depot else depot
+            ax.scatter([locs[cur, 0]], [locs[cur, 1]], marker="*", s=140,
+                       color="black", zorder=5)
+        ax.set_title(f"paso {cut}/{total}", fontsize=9)
+        ax.set_xticks([]); ax.set_yticks([])
+    for ax in axes[len(cuts):]:
+        ax.axis("off")
+    fig.suptitle(title or f"Progresión de la solución ({sum(1 for r in routes if r)} rutas)")
+    fig.tight_layout()
+    if save:
+        fig.savefig(save, dpi=130); plt.close(fig)
+    return fig
+
+
+def plot_case_grid(inst, routes_by_solver: Dict[str, List[List[int]]], *,
+                   metrics_by_solver: Optional[Dict[str, Dict]] = None,
+                   title: str = "", save: Optional[Path] = None):
+    """Rejilla comparativa: la MISMA instancia resuelta por cada método, un
+    panel por solver (estudio de caso del notebook 06). Si se pasan métricas,
+    cada panel anota E[c+Q] y factibilidad de esa solución."""
+    import matplotlib.pyplot as plt
+    solvers = sorted(routes_by_solver)
+    if not solvers:
+        return None
+    locs = np.asarray(inst.locations)
+    depot = int(inst.metadata.get("depot_index", 0))
+    cmap = plt.get_cmap("tab10")
+    cols = min(3, len(solvers))
+    rows = (len(solvers) + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(4.4 * cols, 3.8 * rows))
+    axes = np.atleast_1d(axes).ravel()
+    for ax, sv in zip(axes, solvers):
+        routes = routes_by_solver[sv]
+        ax.scatter(locs[1:, 0], locs[1:, 1], c="0.75", s=14, zorder=2)
+        ax.scatter([locs[depot, 0]], [locs[depot, 1]], marker="s", c="red",
+                   s=70, zorder=4)
+        for k, r in enumerate(routes):
+            if not r:
+                continue
+            path = [depot] + list(r) + [depot]
+            ax.plot(locs[path, 0], locs[path, 1], "-o", ms=2.5,
+                    color=cmap(k % 10), lw=1.1, zorder=3)
+        sub = f"{sum(1 for r in routes if r)} rutas"
+        if metrics_by_solver and sv in metrics_by_solver:
+            m = metrics_by_solver[sv]
+            sub += f" · E[c+Q]={m.get('expected_total', float('nan')):.0f}" \
+                   f" · feas={m.get('feasibility', float('nan')):.2f}"
+        ax.set_title(f"{sv}\n{sub}", fontsize=9)
+        ax.set_xticks([]); ax.set_yticks([])
+    for ax in axes[len(solvers):]:
+        ax.axis("off")
+    fig.suptitle(title or "Estudio de caso: misma instancia, todos los métodos")
+    fig.tight_layout()
+    if save:
+        fig.savefig(save, dpi=130); plt.close(fig)
+    return fig
+
+
+def plot_cost_distributions(samples_by_solver: Dict[str, np.ndarray], *,
+                            alpha: float = 0.95, title: str = "",
+                            save: Optional[Path] = None):
+    """Distribuciones del costo total c+Q de la MISMA instancia bajo los MISMOS
+    escenarios ξ (CRN): las diferencias entre curvas son atribuibles solo a las
+    rutas. Marca el CVaR_α de cada método (línea punteada)."""
+    import matplotlib.pyplot as plt
+    from .stochastic import cvar
+    solvers = sorted(samples_by_solver)
+    if not solvers:
+        return None
+    cmap = plt.get_cmap("tab10")
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    for k, sv in enumerate(solvers):
+        s = np.sort(np.asarray(samples_by_solver[sv], dtype=float))
+        ecdf = np.arange(1, s.size + 1) / s.size
+        ax.plot(s, ecdf, color=cmap(k % 10), lw=1.6, label=sv)
+        ax.axvline(cvar(s, alpha), color=cmap(k % 10), ls=":", lw=1.2)
+    ax.set_xlabel("costo total c+Q por realización ξ")
+    ax.set_ylabel("frecuencia acumulada (ECDF)")
+    ax.set_title(title or f"Distribución del costo bajo ξ (punteado = CVaR$_{{{alpha}}}$)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    if save:
+        fig.savefig(save, dpi=130); plt.close(fig)
+    return fig
+
+
 def save_all_comparison(df, env, slug: str = "cross"):
     """Genera y guarda el set de figuras comparativas estándar."""
     d = _ensure(env, slug)

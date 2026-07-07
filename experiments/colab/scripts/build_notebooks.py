@@ -94,14 +94,43 @@ import os
 N_JOBS = max(1, os.cpu_count() or 1)
 print(f"N_JOBS = {N_JOBS} procesos paralelos (vCPU detectadas)")
 
+# Estudio de caso COMÚN: la misma instancia se dibuja paso a paso en TODOS los
+# notebooks (comparación visual justa entre métodos). n=20 garantiza que hasta
+# los exactos con licencia restringida la cubren.
+CASE_SIZE, CASE_IDX = 20, 0
+
 bank = data.load_bank(env.paths.instances, SIZES, N_INSTANCES,
                       base_seed=proto.base_seed, capacity_mode=proto.capacity_mode, verbose=True)
 print({s: len(v) for s, v in bank.items()}, "instancias por tamaño")
+print("huella del banco (auditoría de piso parejo):", data.bank_fingerprint(bank))
 if N_INSTANCES < 10:
     print("ADVERTENCIA: con N_INSTANCES=5 el Wilcoxon pareado NO puede alcanzar p<0.05 "
           "(mínimo teórico bilateral con n=5: 0.0625). Es una corrida exploratoria; "
           "para las conclusiones de la tesis usa N_INSTANCES=30.")
 '''.strip("\n")
+
+# Celda reutilizable de estudio de caso: misma instancia + misma representación
+# (progresión del recorrido) en todos los notebooks → comparación visual justa.
+def case_study_code(slug, solver_var, name):
+    return code(
+        f'# === Estudio de caso: instancia común n=CASE_SIZE, idx=CASE_IDX ============\n'
+        f'inst_c = bank[CASE_SIZE][CASE_IDX]\n'
+        f'sol_c  = {solver_var}.solve(inst_c, num_realizations=proto.realizations)\n'
+        f'fig = viz.plot_routes(inst_c, sol_c.routes,\n'
+        f'                      title=f"{name} · caso n={{CASE_SIZE}} inst={{CASE_IDX}}")\n'
+        f'viz.save_show(fig, env, "{slug}", f"caso_n{{CASE_SIZE}}_i{{CASE_IDX}}_rutas_{name}")\n'
+        f'fig = viz.plot_route_progression(inst_c, sol_c.routes, n_frames=6,\n'
+        f'                                 title=f"{name}: progresión de la solución")\n'
+        f'viz.save_show(fig, env, "{slug}", f"caso_n{{CASE_SIZE}}_i{{CASE_IDX}}_progresion_{name}")')
+
+
+CASE_MD = md("## Estudio de caso (misma instancia en todos los notebooks)\n"
+             "Se resuelve y exporta paso a paso la **misma** instancia "
+             "(`CASE_SIZE`, `CASE_IDX`, fija en la configuración) con la **misma** "
+             "representación visual (progresión del recorrido): el notebook 06 "
+             "reúne estas figuras en una rejilla método-a-método. Así la "
+             "comparación visual es justa — se compara la solución, no el estilo "
+             "del dibujo.")
 
 
 def header(title, subtitle, body):
@@ -153,6 +182,20 @@ nb00 = notebook([
          'for a in ax: a.set_xlabel("min del día")\n'
          'plt.tight_layout()\n'
          'viz.save_show(fig, env, "00_setup", "vectores_estocasticos")'),
+    md("## 6. Glosario de métricas (qué significa cada columna del CSV)\n"
+       "El núcleo de la suite reproduce las métricas del paper de SVRPBench (Heakl et al. "
+       "2025, §4.1): **TC** = `expected_cost` (Eq. 15), **CVR** = `cvr` (Eq. 16), **FR** = "
+       "`feasibility` (Eq. 17), **RT** = `runtime`, **ROB** = `rob_var` (Eq. 18, varianza) y "
+       "`waiting_time` (Fig. 4). Las demás columnas son **extensiones declaradas** de esta "
+       "tesis (recurso de 2ª etapa y riesgo: `E[c+Q]`, `E[Q]`, `CVaR/VaR`, extremos y "
+       "dispersión de `c+Q`). Diferencia de protocolo declarada: el paper promedia sobre 5 "
+       "realizaciones; aquí usamos `realizations=200` con CRN — necesario para estimar la "
+       "cola (CVaR al 95% con 5 muestras no es estimable). El glosario se exporta junto a "
+       "los resultados."),
+    code('glos = metrics.metrics_glossary()\n'
+         'display(glos)\n'
+         'glos.to_csv(env.paths.results / "metrics_glossary.csv", index=False)\n'
+         'print("glosario ->", env.paths.results / "metrics_glossary.csv")'),
     md("---\n**Listo.** Ejecuta ahora los notebooks `01`…`05` (en cualquier orden) y, al final, "
        "`06_comparacion_y_estadistica` para la tabla comparativa y las pruebas ANOVA/Wilcoxon. "
        "Mantén `USE_DRIVE=True` y los mismos `SIZES`/`N_INSTANCES` en todos."),
@@ -209,7 +252,7 @@ nb01 = notebook([
          'import pandas as pd\n'
          'solver = ExactBranchCut(time_limit=120.0, verbose=False)\n'
          'df_bc = runner.run_solver(solver, "exact-bc", bank_exact, env, proto, verbose=True,\n'
-         '                          n_jobs=N_JOBS)\n'
+         '                          n_jobs=N_JOBS, cost_samples=True)\n'
          'df_bc'),
     md("## Resolver `exact-bc-tw` (CVRPTW soft — **busca satisfacer las ventanas**)\n"
        "Formulación dirigida MTZ que penaliza la tardanza nominal `L_j` en el objetivo "
@@ -219,31 +262,27 @@ nb01 = notebook([
     code('solver_tw = ExactBranchCutTW(time_limit=120.0, tw_penalty=proto.late_penalty,\n'
          '                             verbose=False)\n'
          'df_tw = runner.run_solver(solver_tw, "exact-bc-tw", bank_tw, env, proto, verbose=True,\n'
-         '                          n_jobs=N_JOBS)\n'
+         '                          n_jobs=N_JOBS, cost_samples=True)\n'
          'df = pd.concat([df_bc, df_tw], ignore_index=True)\n'
          'df_tw'),
     md("## Métricas agregadas y figuras\nTodas las figuras quedan en `figures/01_exact/`."),
     code('agg = metrics.aggregate_by_size(df); display(agg)\n'
-         '# Ruta + convergencia B&C de la primera instancia del menor tamaño\n'
-         'inst = bank_exact[min(bank_exact)][0]\n'
-         'sol = solver.solve(inst, num_realizations=proto.realizations)\n'
-         'fig = viz.plot_routes(inst, sol.routes, title=f"exact-bc · n={min(bank_exact)}")\n'
-         'viz.save_show(fig, env, "01_exact", f"rutas_exact_bc_n{min(bank_exact)}")\n'
-         'fig = viz.plot_convergence(sol.extras.get("convergence_log", []), gap=sol.extras.get("gap"),\n'
-         '                           n=min(bank_exact))\n'
-         'viz.save_show(fig, env, "01_exact", f"convergencia_bc_n{min(bank_exact)}")\n'
-         'sol_tw = solver_tw.solve(bank_tw[min(bank_tw)][0], num_realizations=proto.realizations)\n'
-         'fig = viz.plot_routes(bank_tw[min(bank_tw)][0], sol_tw.routes,\n'
-         '                      title=f"exact-bc-tw · n={min(bank_tw)}")\n'
-         'viz.save_show(fig, env, "01_exact", f"rutas_exact_bc_tw_n{min(bank_tw)}")\n'
          'fig = viz.plot_comparison(df)\n'
          'viz.save_show(fig, env, "01_exact", "metricas_por_tamano")'),
-    md("**Interpretación.** `exact-bc` minimiza el costo nominal e ignora las ventanas: menor "
-       "`E[c]`, factibilidad baja — referencia de costo. `exact-bc-tw` sí busca satisfacer las "
-       "ventanas (tardanza nominal penalizada): menor `E[c+Q]`/tardanza a cambio de más costo "
-       "de viaje — referencia de cumplimiento determinista. La brecha entre ambos aísla el "
-       "precio de las restricciones; la brecha de `exact-bc-tw` frente a la factibilidad "
-       "perfecta aísla el precio de la estocasticidad."),
+    CASE_MD,
+    case_study_code("01_exact", "solver", "exact-bc"),
+    code('# La búsqueda del exacto se documenta con su convergencia B&C (incumbente vs. cota)\n'
+         'fig = viz.plot_convergence(sol_c.extras.get("convergence_log", []),\n'
+         '                           gap=sol_c.extras.get("gap"), n=CASE_SIZE)\n'
+         'viz.save_show(fig, env, "01_exact", f"caso_n{CASE_SIZE}_i{CASE_IDX}_convergencia_bc")'),
+    case_study_code("01_exact", "solver_tw", "exact-bc-tw"),
+    md("**Qué observar (guía de lectura — las conclusiones se toman en el notebook 06 con "
+       "estadística, no aquí).** (i) ¿Difieren `E[c]` y `E[c+Q]` entre `exact-bc` y "
+       "`exact-bc-tw`, y en qué dirección? (ii) ¿Cuánta tardanza nominal "
+       "(`nominal_tw_lateness` en extras) elimina la variante TW y a qué precio en costo de "
+       "viaje? (iii) `gap`: ¿en qué tamaños el B&C prueba optimalidad dentro del límite de "
+       "tiempo y dónde empieza a agotar el presupuesto? (iv) `fallback`: debe ser 0 en "
+       "condiciones normales."),
 ])
 
 
@@ -267,22 +306,25 @@ nb02 = notebook([
        "runtime T4 espera decenas de minutos — un runtime A100/L4 (8–12 vCPU) lo reduce ~5×."),
     code('from svrplab.solvers.metaheuristic import ACO, Tabu\n'
          'import pandas as pd\n'
-         'df_aco  = runner.run_solver(ACO(n_seeds=5),  "aco",  bank, env, proto, verbose=True,\n'
-         '                            n_jobs=N_JOBS)\n'
-         'df_tabu = runner.run_solver(Tabu(n_seeds=5), "tabu", bank, env, proto, verbose=True,\n'
-         '                            n_jobs=N_JOBS)\n'
+         'aco_solver, tabu_solver = ACO(n_seeds=5), Tabu(n_seeds=5)\n'
+         'df_aco  = runner.run_solver(aco_solver,  "aco",  bank, env, proto, verbose=True,\n'
+         '                            n_jobs=N_JOBS, cost_samples=True)\n'
+         'df_tabu = runner.run_solver(tabu_solver, "tabu", bank, env, proto, verbose=True,\n'
+         '                            n_jobs=N_JOBS, cost_samples=True)\n'
          'df = pd.concat([df_aco, df_tabu], ignore_index=True)\n'
          'df'),
     md("## Métricas y figuras\nExportadas a `figures/02_metaheuristic/`."),
     code('display(metrics.aggregate_by_size(df))\n'
          'fig = viz.plot_comparison(df)\n'
-         'viz.save_show(fig, env, "02_metaheuristic", "metricas_por_tamano")\n'
-         'inst = bank[SIZES[0]][0]\n'
-         'sol = ACO(n_seeds=5).solve(inst, num_realizations=proto.realizations)\n'
-         'fig = viz.plot_routes(inst, sol.routes, title=f"aco · n={SIZES[0]}")\n'
-         'viz.save_show(fig, env, "02_metaheuristic", f"rutas_aco_n{SIZES[0]}")'),
-    md("**Interpretación.** Las metaheurísticas alcanzan **factibilidad alta** pero usando "
-       "**más vehículos** (rutas cortas) y, por tanto, mayor costo: la otra familia del tradeoff."),
+         'viz.save_show(fig, env, "02_metaheuristic", "metricas_por_tamano")'),
+    CASE_MD,
+    case_study_code("02_metaheuristic", "aco_solver", "aco"),
+    case_study_code("02_metaheuristic", "tabu_solver", "tabu"),
+    md("**Qué observar (guía de lectura — las conclusiones se toman en el notebook 06 con "
+       "estadística, no aquí).** (i) Factibilidad y CVR frente al número de vehículos: ¿cómo "
+       "negocia cada metaheurística el tradeoff flota↔cumplimiento? (ii) `seed_std_cost` "
+       "(extras): ¿cuánta variabilidad hay entre las semillas del multistart best-of-K? "
+       "(iii) `runtime`: ¿cómo escala el costo de construcción con n?"),
 ])
 
 
@@ -311,8 +353,10 @@ nb03 = notebook([
          '              device=env.device, models_dir=env.paths.models, n_jobs=N_JOBS, verbose=True)\n'
          'sl      = NCOSupervised(teacher="exact-bc", **common)\n'
          'sl_feas = NCOSupervisedFeasible(**common)   # maestro = aco (factible)\n'
-         'df_sl   = runner.run_solver(sl,      "nco-sl",      bank, env, proto, verbose=True, n_jobs=N_JOBS)\n'
-         'df_feas = runner.run_solver(sl_feas, "nco-sl-feas", bank, env, proto, verbose=True, n_jobs=N_JOBS)\n'
+         'df_sl   = runner.run_solver(sl,      "nco-sl",      bank, env, proto, verbose=True,\n'
+         '                            n_jobs=N_JOBS, cost_samples=True)\n'
+         'df_feas = runner.run_solver(sl_feas, "nco-sl-feas", bank, env, proto, verbose=True,\n'
+         '                            n_jobs=N_JOBS, cost_samples=True)\n'
          'df = pd.concat([df_sl, df_feas], ignore_index=True); df'),
     md("## Curva de entrenamiento y figuras\nExportadas a `figures/03_nco_supervised/`. "
        "**Limitación declarada:** el modelo se entrena en n∈{10,20}; evaluar en n≥100 es "
@@ -323,9 +367,14 @@ nb03 = notebook([
          'display(metrics.aggregate_by_size(df))\n'
          'fig = viz.plot_comparison(df)\n'
          'viz.save_show(fig, env, "03_nco_supervised", "metricas_por_tamano")'),
-    md("**Interpretación.** `nco-sl` (imita al óptimo) hereda baja factibilidad; `nco-sl-feas` "
-       "(imita a aco) hereda factibilidad alta — la imitación voraz es **con pérdida**. Confirma "
-       "que el límite proviene del **maestro**, no del paradigma NCO."),
+    CASE_MD,
+    case_study_code("03_nco_supervised", "sl", "nco-sl"),
+    case_study_code("03_nco_supervised", "sl_feas", "nco-sl-feas"),
+    md("**Qué observar (guía de lectura — conclusiones en el notebook 06).** (i) ¿Difieren "
+       "factibilidad y `E[c+Q]` entre `nco-sl` (maestro exact-bc) y `nco-sl-feas` (maestro "
+       "aco)? El diseño permite atribuir esa diferencia al **maestro**, no al paradigma. "
+       "(ii) `runtime` de inferencia frente a los métodos que buscan por instancia. "
+       "(iii) CE de validación: ¿converge la imitación sin sobreajuste?"),
 ])
 
 
@@ -355,23 +404,22 @@ nb04 = notebook([
          'rl = NCOReinforce(train_sizes=(10,20), steps_per_size=1500, batch=64, embed_dim=128,\n'
          '                  tw_penalty=proto.late_penalty,   # 0 = baseline puro de costo\n'
          '                  device=env.device, models_dir=env.paths.models, verbose=True)\n'
-         'df = runner.run_solver(rl, "nco-rl", bank, env, proto, verbose=True, n_jobs=N_JOBS)\n'
+         'df = runner.run_solver(rl, "nco-rl", bank, env, proto, verbose=True, n_jobs=N_JOBS,\n'
+         '                       cost_samples=True)\n'
          'df'),
     md("## Curva de entrenamiento y figuras\nExportadas a `figures/04_nco_pomo_am/`."),
     code('if getattr(rl, "history", None):\n'
          '    fig = viz.plot_training_curve(rl.history, ylabel="costo medio", title="nco-rl (POMO): costo")\n'
          '    viz.save_show(fig, env, "04_nco_pomo_am", "curva_entrenamiento_pomo")\n'
-         'display(metrics.aggregate_by_size(df))\n'
-         'inst = bank[SIZES[0]][0]\n'
-         'sol = rl.solve(inst, num_realizations=proto.realizations)\n'
-         'fig = viz.plot_routes(inst, sol.routes, title=f"nco-rl (POMO) · n={SIZES[0]}")\n'
-         'viz.save_show(fig, env, "04_nco_pomo_am", f"rutas_pomo_n{SIZES[0]}")'),
-    md("**Interpretación.** Bien entrenado, POMO se acerca al óptimo de costo y **supera a la NCO "
-       "supervisada** (coherente con la literatura: RL > supervisado). Con `tw_penalty>0` la "
-       "política busca cumplir las ventanas en el plan nominal; la degradación restante bajo ξ "
-       "es atribuible a la **estocasticidad** (retrasos log-normales, accidentes), no a ignorar "
-       "las restricciones — exactamente la fragilidad que el anteproyecto atribuye a la NCO "
-       "determinista."),
+         'display(metrics.aggregate_by_size(df))'),
+    CASE_MD,
+    case_study_code("04_nco_pomo_am", "rl", "nco-rl"),
+    md("**Qué observar (guía de lectura — conclusiones en el notebook 06).** (i) ¿Se degradan "
+       "factibilidad/CVaR al pasar del plan nominal a la evaluación bajo ξ, y cuánto? Con "
+       "`tw_penalty>0` esa degradación es atribuible a la estocasticidad, no a ignorar "
+       "restricciones. (ii) ¿La curva de entrenamiento converge de forma estable (sin colapso "
+       "de modo)? (iii) `runtime` de inferencia frente a los métodos de búsqueda por instancia. "
+       "(iv) En n≥100, recuerda que el modelo opera fuera de su distribución de entrenamiento."),
 ])
 
 
@@ -405,7 +453,8 @@ nb05 = notebook([
          '                infer_ants=16, infer_iters=12, infer_realizations=40,\n'
          '                device=env.device, models_dir=env.paths.models, n_jobs=N_JOBS,\n'
          '                verbose=True)\n'
-         'df = runner.run_solver(facs, "ehbg-facs", bank, env, proto, verbose=True, n_jobs=N_JOBS)\n'
+         'df = runner.run_solver(facs, "ehbg-facs", bank, env, proto, verbose=True, n_jobs=N_JOBS,\n'
+         '                       cost_samples=True)\n'
          'df'),
     md("## (Opcional, Fase 5) Variante epistémica EHBG-FACS-ENN"),
     code('from svrplab.solvers.ehbg_facs import EHBGFACSEpistemic\n'
@@ -415,9 +464,12 @@ nb05 = notebook([
          '                             device=env.device, models_dir=env.paths.models,\n'
          '                             n_jobs=N_JOBS, verbose=True)\n'
          'df_enn = runner.run_solver(facs_enn, "ehbg-facs-enn", bank, env, proto, verbose=True,\n'
-         '                           n_jobs=N_JOBS)\n'
+         '                           n_jobs=N_JOBS, cost_samples=True)\n'
          'df_enn'),
-    md("## Curvas de entrenamiento (TB / DB / CVaR) y figuras\nExportadas a `figures/05_ehbg_facs/`."),
+    md("## Curvas de entrenamiento (TB / DB / CVaR)\nDiagnósticos **propios de la GFlowNet** "
+       "(H1 del anteproyecto): la pérdida TB documenta el balance global de trayectoria, la DB "
+       "la consistencia local, y el CVaR medio la señal de recompensa. Exportadas a "
+       "`figures/05_ehbg_facs/`."),
     code('import matplotlib.pyplot as plt\n'
          'h = getattr(facs, "history", {})\n'
          'if h:\n'
@@ -428,15 +480,46 @@ nb05 = notebook([
          '    for a in ax: a.set_xlabel("paso")\n'
          '    plt.tight_layout()\n'
          '    viz.save_show(fig, env, "05_ehbg_facs", "curvas_tb_db_cvar")\n'
-         'display(metrics.aggregate_by_size(df))\n'
-         'inst = bank[SIZES[0]][0]\n'
-         'sol = facs.solve(inst, num_realizations=proto.realizations)\n'
-         'fig = viz.plot_routes(inst, sol.routes, title=f"EHBG-FACS · n={SIZES[0]}")\n'
-         'viz.save_show(fig, env, "05_ehbg_facs", f"rutas_ehbg_facs_n{SIZES[0]}")'),
-    md("**Interpretación.** EHBG-FACS combina el muestreo adaptativo (diversidad de la GFlowNet) "
-       "con el refinamiento poblacional del ACO y una recompensa de cola (CVaR), apuntando a la "
-       "**esquina ideal** (bajo costo *y* alta factibilidad) que el informe técnico identificó "
-       "vacía. Compáralo con los baselines en el notebook 06."),
+         'display(metrics.aggregate_by_size(df))'),
+    CASE_MD,
+    case_study_code("05_ehbg_facs", "facs", "ehbg-facs"),
+    md("## Diagnósticos del muestreo (traza GFACS, diversidad y distribución de costo)\n"
+       "Evidencia **medible** de los mecanismos de la propuesta sobre el estudio de caso "
+       "(H2/H3 del anteproyecto): (a) traza de búsqueda del enjambre (mejor CVaR por "
+       "iteración); (b) **diversidad muestral** = proporción de soluciones distintas entre "
+       "hormigas por iteración (diagnóstico anti-colapso de modo; queda también en la columna "
+       "`diversity` del CSV); (c) distribución completa del costo `c+Q` bajo los 200 "
+       "escenarios ξ con su CVaR — la métrica que la recompensa optimiza. Ningún baseline "
+       "expone estos diagnósticos porque no muestrea una distribución; la comparación de "
+       "resultados finales sigue siendo con las métricas comunes del notebook 06."),
+    code('tr = sol_c.extras.get("search_trace", {})\n'
+         'if tr.get("best_cvar"):\n'
+         '    fig, ax = plt.subplots(1, 2, figsize=(11, 3.4))\n'
+         '    ax[0].plot(tr["iter_best_cvar"], "o-", label="mejor de la iteración")\n'
+         '    ax[0].plot(tr["best_cvar"], "-", c="crimson", label="mejor global")\n'
+         '    ax[0].set_xlabel("iteración GFACS"); ax[0].set_ylabel("CVaR"); ax[0].legend()\n'
+         '    ax[0].set_title("Traza de búsqueda del enjambre")\n'
+         '    ax[1].plot(tr["unique_ratio"], "s-", c="teal"); ax[1].set_ylim(0, 1.05)\n'
+         '    ax[1].set_xlabel("iteración GFACS")\n'
+         '    ax[1].set_title("Diversidad muestral (soluciones únicas / hormigas)")\n'
+         '    plt.tight_layout()\n'
+         '    viz.save_show(fig, env, "05_ehbg_facs", f"caso_n{CASE_SIZE}_i{CASE_IDX}_traza_diversidad")\n'
+         'print(f"diversidad media del muestreo: {sol_c.extras.get(\'diversity\', float(\'nan\')):.2f}")\n'
+         'from svrplab import stochastic\n'
+         'sc = stochastic.score_routes(inst_c, sol_c.routes, num_realizations=proto.realizations,\n'
+         '                             seed=int(inst_c.metadata["seed"]), alpha=proto.alpha,\n'
+         '                             late_penalty=proto.late_penalty,\n'
+         '                             accident_scale=proto.accident_scale)\n'
+         'fig = viz.plot_cost_hist(sc.total_samples, alpha=proto.alpha,\n'
+         '                         title=f"EHBG-FACS: distribución de c+Q bajo ξ (caso n={CASE_SIZE})")\n'
+         'viz.save_show(fig, env, "05_ehbg_facs", f"caso_n{CASE_SIZE}_i{CASE_IDX}_dist_costo")'),
+    md("**Qué observar (guía de lectura — conclusiones en el notebook 06).** (i) ¿Descienden "
+       "TB/DB de forma estable (H1)? (ii) ¿Se mantiene la diversidad muestral alta a lo largo "
+       "de las iteraciones GFACS, o colapsa (H2)? (iii) ¿La traza del enjambre sigue mejorando "
+       "el CVaR en las últimas iteraciones (presupuesto bien usado) o se satura pronto? "
+       "(iv) En la distribución de c+Q: ¿la cola derecha es corta respecto a los baselines "
+       "(compárala en el notebook 06 bajo los MISMOS ξ)? (v) `diversity` en el CSV frente a "
+       "la factibilidad/CVaR: ¿coexisten diversidad y calidad?"),
 ])
 
 
@@ -467,9 +550,31 @@ nb06 = notebook([
          'cobertura = df.pivot_table(index="solver", columns="size", values="instance",\n'
          '                           aggfunc="count").fillna(0).astype(int)\n'
          'display(cobertura)   # instancias por (solver, tamaño); 0 = no corrió ese tamaño'),
+    md("## Auditoría del piso parejo\nCada corrida persiste en su `run.json` la **huella por "
+       "tamaño** del banco que resolvió (hash de las semillas de sus instancias). Aquí se "
+       "compara contra el banco actual: cualquier discrepancia significa que ese solver corrió "
+       "sobre OTRAS instancias y su comparación no sería válida."),
+    code('import pandas as pd\n'
+         'ref = data.size_fingerprints(bank)\n'
+         'meta = runner.load_run_meta(env)\n'
+         'filas = []\n'
+         'for sv, m in sorted(meta.items()):\n'
+         '    sfp = {int(k): v for k, v in (m.get("size_fingerprints") or {}).items()}\n'
+         '    difieren = [s for s, h in sfp.items() if s in ref and ref[s] != h]\n'
+         '    filas.append({"solver": sv, "tamaños": sorted(sfp), "device": m.get("device"),\n'
+         '                  "realizations": (m.get("protocol") or {}).get("realizations"),\n'
+         '                  "banco_ok": not difieren, "tamaños_discrepantes": difieren})\n'
+         'audit = pd.DataFrame(filas)\n'
+         'display(audit)\n'
+         'assert audit["banco_ok"].all(), "PISO PAREJO ROTO: hay solvers con instancias distintas"\n'
+         'print("Piso parejo verificado: todos los solvers resolvieron las mismas instancias "\n'
+         '      "en los tamaños que cubren.")'),
     md("## Tabla resumen (leaderboard)\nPromedio sobre todo el banco; ordenado por costo total "
-       "esperado con recurso."),
-    code('display(metrics.leaderboard(df, by="expected_total"))\n'
+       "esperado con recurso. El glosario (también en `results/metrics_glossary.csv`) define "
+       "cada columna, sus unidades, la dirección deseable y si proviene del paper de SVRPBench "
+       "(Eqs. 15–18) o es una extensión declarada."),
+    code('display(metrics.metrics_glossary())\n'
+         'display(metrics.leaderboard(df, by="expected_total"))\n'
          'display(metrics.aggregate_by_size(df))'),
     md("## Figuras comparativas\nBarras por tamaño y tradeoff costo–factibilidad–flota (la región "
        "ideal es arriba-izquierda: bajo costo y alta factibilidad). Todas quedan en "
@@ -479,6 +584,34 @@ nb06 = notebook([
          'for s in sorted(df["size"].unique()):\n'
          '    fig = viz.plot_tradeoff(df, size=int(s))\n'
          '    viz.save_show(fig, env, "cross", f"tradeoff_n{int(s)}")'),
+    md("## Estudio de caso: la misma instancia, método a método\nCada notebook persiste sus "
+       "rutas (`*_routes.json`) y sus muestras de costo (`*_samples.npz`). Aquí se dibuja la "
+       "**misma instancia** (`CASE_SIZE`, `CASE_IDX`) resuelta por cada método (rejilla, con "
+       "E[c+Q] y factibilidad anotadas) y se superponen las **distribuciones del costo c+Q "
+       "bajo los MISMOS 200 escenarios ξ** (CRN): las diferencias entre curvas son atribuibles "
+       "únicamente a las rutas, no al azar de la simulación."),
+    code('inst_c = bank[CASE_SIZE][CASE_IDX]\n'
+         'key = f"{CASE_SIZE}:{CASE_IDX}"\n'
+         'rutas, mets, dists = {}, {}, {}\n'
+         'for sv in sorted(df.solver.unique()):\n'
+         '    r = runner.load_routes(env, sv).get(key)\n'
+         '    if not r:\n'
+         '        continue    # ese solver no cubrió el tamaño del caso (p. ej. licencia)\n'
+         '    rutas[sv] = r\n'
+         '    fila = df[(df.solver == sv) & (df["size"] == CASE_SIZE) & (df.instance == CASE_IDX)]\n'
+         '    if len(fila):\n'
+         '        mets[sv] = fila.iloc[0].to_dict()\n'
+         '    s = runner.load_samples(env, sv).get(key)\n'
+         '    if s is not None:\n'
+         '        dists[sv] = s\n'
+         'print("métodos con el caso resuelto:", sorted(rutas))\n'
+         'fig = viz.plot_case_grid(inst_c, rutas, metrics_by_solver=mets,\n'
+         '                         title=f"Estudio de caso · n={CASE_SIZE}, instancia {CASE_IDX}")\n'
+         'viz.save_show(fig, env, "cross", f"caso_n{CASE_SIZE}_i{CASE_IDX}_grid")\n'
+         'if dists:\n'
+         '    fig = viz.plot_cost_distributions(dists, alpha=proto.alpha,\n'
+         '        title=f"c+Q bajo los MISMOS xi (CRN) · n={CASE_SIZE} inst {CASE_IDX}")\n'
+         '    viz.save_show(fig, env, "cross", f"caso_n{CASE_SIZE}_i{CASE_IDX}_distribuciones")'),
     md("## Validación estadística\nPara cada métrica clave y cada tamaño: supuestos, prueba "
        "ómnibus (ANOVA/Friedman) y post-hoc Wilcoxon pareado (Holm). Diseño de **bloques por "
        "instancia** (mismo ξ por CRN). **Potencia:** con 5 bloques el p bilateral mínimo de "

@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from . import metrics, stochastic
+from . import data as svrp_data, metrics, stochastic
 from .parallel import effective_jobs, process_map
 from .protocol import PARADIGM_OF, Protocol
 
@@ -110,9 +110,11 @@ def run_solver(solver, solver_name: str, bank: dict, env, proto: Protocol, *,
         else:
             results = [(sol, None, wall) for sol, wall in solved]
 
+    routes_map: Dict[str, List] = {}
     for (s, i, inst), (sol, sc, wall) in zip(pairs, results):
         if cost_samples and sc is not None:
             samples[f"{s}:{i}"] = sc.total_samples
+        routes_map[f"{s}:{i}"] = [list(map(int, r)) for r in sol.routes]
         seed = int(inst.metadata.get("seed", 0))
         row = metrics.row_from_solution(solver_name, paradigm, s, i, seed, sol)
         rows.append(row)
@@ -124,11 +126,11 @@ def run_solver(solver, solver_name: str, bank: dict, env, proto: Protocol, *,
 
     df = metrics.to_dataframe(rows)
     if save:
-        _persist(df, samples, env, slug, solver_name, proto)
+        _persist(df, samples, routes_map, bank, env, slug, solver_name, proto)
     return df
 
 
-def _persist(df, samples, env, slug, solver_name, proto: Protocol):
+def _persist(df, samples, routes_map, bank, env, slug, solver_name, proto: Protocol):
     outdir: Path = env.paths.results / slug
     outdir.mkdir(parents=True, exist_ok=True)
     csv = outdir / f"{solver_name}_metrics.csv"
@@ -138,11 +140,46 @@ def _persist(df, samples, env, slug, solver_name, proto: Protocol):
         "solver": solver_name,
         "protocol": proto.as_dict(),
         "device": env.device,
+        "bank_fingerprint": svrp_data.bank_fingerprint(bank),
+        "size_fingerprints": svrp_data.size_fingerprints(bank),
+        "sizes": sorted(int(s) for s in bank),
+        "n_instances": {int(s): len(v) for s, v in bank.items()},
         "aggregate": metrics.aggregate_by_size(df).to_dict(orient="records"),
     }, indent=2))
+    # Rutas por instancia: habilitan el estudio de caso comparativo del
+    # notebook 06 (misma instancia dibujada método a método) y re-evaluaciones.
+    (outdir / f"{solver_name}_routes.json").write_text(json.dumps(routes_map))
     if samples:
         np.savez(outdir / f"{solver_name}_samples.npz", **samples)
-    print(f"[runner] guardado -> {csv}")
+    print(f"[runner] guardado -> {csv} (+rutas, +run.json)")
+
+
+def load_routes(env, solver_name: str) -> Dict[str, List]:
+    """Carga las rutas persistidas de un solver (``{"size:instance": rutas}``)."""
+    for p in sorted(env.paths.results.rglob(f"{solver_name}_routes.json")):
+        return json.loads(p.read_text())
+    return {}
+
+
+def load_run_meta(env) -> Dict[str, Dict]:
+    """Carga los ``*_run.json`` de todos los solvers (para auditar en el
+    notebook 06 que todos usaron el MISMO banco y protocolo: piso parejo)."""
+    out = {}
+    for p in sorted(env.paths.results.rglob("*_run.json")):
+        try:
+            meta = json.loads(p.read_text())
+            out[meta.get("solver", p.stem)] = meta
+        except Exception as e:
+            print(f"[runner] omito {p}: {e}")
+    return out
+
+
+def load_samples(env, solver_name: str) -> Dict[str, np.ndarray]:
+    """Carga las muestras de costo total c+Q persistidas (``cost_samples=True``)."""
+    for p in sorted(env.paths.results.rglob(f"{solver_name}_samples.npz")):
+        raw = np.load(p)
+        return {k: raw[k] for k in raw.files}
+    return {}
 
 
 def load_all_results(env) -> pd.DataFrame:

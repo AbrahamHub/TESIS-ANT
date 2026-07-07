@@ -136,6 +136,26 @@ papers HBG/GFACS/ENN; las simplificaciones se documentan en `solvers/ehbg_facs.p
   costo de muestreo ÷K).
 - **Figuras:** toda figura mostrada en los notebooks se exporta también a
   `figures/<paradigma>/` en Drive vía `viz.save_show`.
+- **Métricas (alineadas al paper):** el núcleo del CSV reproduce las métricas de
+  SVRPBench §4.1 — TC=`expected_cost` (Eq. 15), CVR=`cvr` (Eq. 16), FR=`feasibility`
+  (Eq. 17), RT=`runtime`, ROB=`rob_var` (Eq. 18, varianza) y `waiting_time` (Fig. 4) —
+  más extensiones declaradas: `E[c+Q]`, `E[Q]`, `CVaR/VaR_α`, `total_std`,
+  `worst/best_total`, `n_realizations`, `diversity` (métodos poblacionales) y
+  `fallback`. El glosario completo (definición/unidades/dirección/fuente) está en
+  `metrics.metrics_glossary()` y se exporta a `results/metrics_glossary.csv`.
+  Diferencia declarada de protocolo: el paper promedia 5 realizaciones; aquí 200 con
+  CRN (necesarias para estimar CVaR al 95%).
+- **Estudio de caso común:** todos los notebooks resuelven y exportan paso a paso la
+  MISMA instancia (`CASE_SIZE=20`, `CASE_IDX=0`) con la misma representación
+  (`viz.plot_route_progression`); el notebook 06 arma la rejilla método-a-método
+  (`*_routes.json`) y superpone las distribuciones de `c+Q` bajo los MISMOS ξ
+  (`*_samples.npz`, CRN) — las diferencias entre curvas son atribuibles solo a las rutas.
+- **Auditoría de piso parejo:** cada corrida persiste en su `run.json` la huella por
+  tamaño del banco (`data.size_fingerprints`); el notebook 06 la verifica con un
+  `assert` antes de comparar.
+- **Sin interpretación anticipada:** las celdas de cierre de los notebooks 01–05 son
+  guías de lectura ("qué observar"), no predicciones; las conclusiones se toman en el
+  notebook 06 tras la estadística.
 
 ## Verificación local (sin GPU)
 

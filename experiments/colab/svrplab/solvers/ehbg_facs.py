@@ -229,7 +229,7 @@ def _ant_task(args):
 
 def aco_search(eta, instance, *, n_ants=12, n_iters=8, alpha_aco=1.0, beta_aco=2.0,
                rho=0.1, Q=1.0, elite=3, aco_realizations=30, seed=0, late_penalty=1.0,
-               accident_scale=1.0, alpha_cvar=0.95, n_jobs=1):
+               accident_scale=1.0, alpha_cvar=0.95, n_jobs=1, trace=False):
     """ACO guiado por η con feromona; puntúa cada hormiga con CVaR (CRN, R reducido).
     Devuelve (mejor_rutas, mejor_score, pool) donde ``pool`` = trayectorias elite para el
     búfer de replay.
@@ -267,6 +267,8 @@ def aco_search(eta, instance, *, n_ants=12, n_iters=8, alpha_aco=1.0, beta_aco=2
     pher = np.ones((n, n), dtype=np.float64)
     best_routes, best_score, best_cost = None, None, np.inf
     pool = []
+    hist = {"best_cvar": [], "iter_best_cvar": [], "iter_mean_cvar": [],
+            "unique_ratio": []}
     try:
         for it in range(n_iters):
             tasks = [(it, k, pher) for k in range(n_ants)]
@@ -278,6 +280,15 @@ def aco_search(eta, instance, *, n_ants=12, n_iters=8, alpha_aco=1.0, beta_aco=2
                 ants.append((seq, routes, cost, sc))
                 if cost < best_cost:
                     best_cost, best_routes, best_score = cost, routes, sc
+            if trace:
+                costs_it = [a[2] for a in ants]
+                hist["iter_best_cvar"].append(float(min(costs_it)))
+                hist["iter_mean_cvar"].append(float(np.mean(costs_it)))
+                hist["best_cvar"].append(float(best_cost))
+                # diversidad muestral: proporción de soluciones DISTINTAS entre
+                # las hormigas de la iteración (diagnóstico anti-colapso de modo)
+                hist["unique_ratio"].append(
+                    len({tuple(a[0]) for a in ants}) / max(1, len(ants)))
             pher *= (1.0 - rho)                          # evaporación
             for seq, routes, cost, sc in sorted(ants, key=lambda a: a[2])[:elite]:
                 dep = Q / (cost + 1e-9)
@@ -290,6 +301,8 @@ def aco_search(eta, instance, *, n_ants=12, n_iters=8, alpha_aco=1.0, beta_aco=2
         if ant_pool is not None:
             ant_pool.close(); ant_pool.join()
         _ANT_CTX.clear()
+    if trace:
+        return best_routes, best_score, pool, hist
     return best_routes, best_score, pool
 
 
@@ -535,13 +548,13 @@ class EHBGFACS(Solver):
         feat, demand, cap, _ = T.instance_tensors([instance], self.device)
         t0 = time.time()
         eta = _eta_numpy(self._model, feat, self.device)
-        routes, _, _ = aco_search(
+        routes, _, _, search_hist = aco_search(
             eta, instance, n_ants=self.infer_ants, n_iters=self.infer_iters,
             alpha_aco=self.alpha_aco, beta_aco=self.beta_aco, rho=self.rho,
             aco_realizations=self.infer_realizations,
             seed=int(instance.metadata.get("seed", 0)), late_penalty=self.late_penalty,
             accident_scale=self.accident_scale, alpha_cvar=self.alpha,
-            n_jobs=self.n_jobs)
+            n_jobs=self.n_jobs, trace=True)
         infer_time = time.time() - t0
         routes = routes or []
 
@@ -554,7 +567,10 @@ class EHBGFACS(Solver):
         extras.update({"n_routes": len(routes), "realizations": Rz,
                        "train_time_s": self._train_time, "method": "EHBG-FACS",
                        "lambda_db": self.lam_db, "temperature": self.temperature,
-                       "epistemic": self.epinet, "train_sizes": list(self.train_sizes)})
+                       "epistemic": self.epinet, "train_sizes": list(self.train_sizes),
+                       "search_trace": search_hist,
+                       "diversity": (float(np.mean(search_hist["unique_ratio"]))
+                                     if search_hist["unique_ratio"] else float("nan"))})
         return Solution(routes=routes, total_cost=score.expected_cost, runtime=infer_time,
                         feasibility=score.feasibility, cvr=score.cvr,
                         waiting_time=score.waiting_time, robustness=score.robustness, extras=extras)

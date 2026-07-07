@@ -18,18 +18,63 @@ import pandas as pd
 METRIC_COLUMNS = [
     "solver", "paradigm", "size", "instance", "seed",
     "det_cost",        # costo determinista (objetivo del MIP / longitud nominal); NaN si N/A
-    "expected_cost",   # E[c]  tiempo de viaje estocástico
+    "expected_cost",   # E[c]  tiempo de viaje estocástico (TC, Eq. 15 SVRPBench)
     "expected_total",  # E[c+Q]  con recurso de 2ª etapa
+    "expected_recourse",  # E[Q] = E[c+Q] − E[c]  (costo esperado del recurso)
     "cvar",            # CVaR_alpha(c+Q)
-    "feasibility",     # tasa de factibilidad [0, 1]
-    "cvr",             # tasa de violación (%)
+    "var_alpha",       # VaR_alpha(c+Q)
+    "feasibility",     # tasa de factibilidad [0, 1] (FR, Eq. 17 SVRPBench)
+    "cvr",             # tasa de violación (%) (CVR, Eq. 16 SVRPBench)
     "robustness",      # std de c entre realizaciones
-    "tw_violations",   # promedio de ventanas violadas
-    "runtime",         # segundos de cómputo del solver (inferencia para NCO)
+    "rob_var",         # ROB del paper (Eq. 18): varianza de c
+    "total_std",       # std de c+Q entre realizaciones
+    "worst_total",     # peor c+Q observado (máximo entre realizaciones)
+    "best_total",      # mejor c+Q observado (mínimo entre realizaciones)
+    "waiting_time",    # espera media por llegada anticipada (Fig. 4 SVRPBench)
+    "tw_violations",   # promedio de ventanas violadas por realización
+    "n_realizations",  # R escenarios CRN evaluados
+    "runtime",         # segundos de cómputo del solver (inferencia para NCO) (RT)
     "train_time_s",    # costo de entrenamiento amortizado (NCO/EHBG); NaN si N/A
     "gap",             # brecha MIP (0 = óptimo probado); NaN si N/A
     "n_vehicles",      # vehículos/rutas usadas
+    "diversity",       # proporción de soluciones distintas muestreadas (métodos poblacionales); NaN si N/A
+    "fallback",        # 1 si la ruta provino del constructivo de respaldo (exactos); 0/NaN si no
 ]
+
+# Glosario canónico: qué significa cada columna, en qué unidades, qué dirección
+# es mejor y de dónde proviene la definición (ecuación del paper SVRPBench o
+# extensión declarada de esta tesis). Los notebooks lo muestran y lo exportan.
+GLOSSARY = [
+    ("det_cost", "Costo nominal determinista optimizado por el solver (tiempo de viaje τ sin ξ)", "min", "menor", "interno (objetivo MIP)"),
+    ("expected_cost", "E[c]: tiempo de viaje esperado bajo ξ — Total Cost del paper", "min", "menor", "SVRPBench Eq. 15"),
+    ("expected_total", "E[c+Q]: costo esperado incluyendo recurso de 2ª etapa Q (tardanza penalizada)", "min", "menor", "extensión (Gendreau et al. 1996)"),
+    ("expected_recourse", "E[Q]: costo esperado del recurso — cuánto paga la ruta por incumplir bajo ξ", "min", "menor", "extensión"),
+    ("cvar", "CVaR_α(c+Q): costo esperado en el peor (1−α) de los escenarios", "min", "menor", "extensión (Rockafellar & Uryasev 2000)"),
+    ("var_alpha", "VaR_α(c+Q): cuantil α del costo total (umbral de la cola)", "min", "menor", "extensión"),
+    ("feasibility", "FR: fracción de realizaciones sin violación alguna", "[0,1]", "mayor", "SVRPBench Eq. 17"),
+    ("cvr", "CVR: % de clientes con violación (ventana/capacidad/cobertura)", "%", "menor", "SVRPBench Eq. 16"),
+    ("robustness", "std(c) entre realizaciones (raíz de la ROB del paper)", "min", "menor", "derivada de Eq. 18"),
+    ("rob_var", "ROB: varianza de c entre realizaciones", "min²", "menor", "SVRPBench Eq. 18"),
+    ("total_std", "std(c+Q) entre realizaciones (dispersión del costo con recurso)", "min", "menor", "extensión"),
+    ("worst_total", "max(c+Q) observado en las R realizaciones (peor escenario)", "min", "menor", "extensión"),
+    ("best_total", "min(c+Q) observado en las R realizaciones", "min", "menor", "extensión"),
+    ("waiting_time", "Espera media acumulada por llegar antes de la apertura de ventana", "min", "informativa", "SVRPBench Fig. 4"),
+    ("tw_violations", "Nº medio de ventanas violadas por realización", "conteo", "menor", "interno"),
+    ("n_realizations", "R: escenarios Monte Carlo CRN evaluados (paper usa 5; aquí 200 para cola estable)", "conteo", "—", "protocolo"),
+    ("runtime", "RT: tiempo de cómputo del solver por instancia (inferencia en NCO)", "s", "menor", "SVRPBench §4.1"),
+    ("train_time_s", "Entrenamiento amortizado del modelo (una vez por notebook)", "s", "menor", "extensión"),
+    ("gap", "Brecha MIP relativa al mejor acotamiento (0 = óptimo probado)", "fracción", "menor", "interno (exactos)"),
+    ("n_vehicles", "Rutas/vehículos usados por la solución", "conteo", "informativa", "interno"),
+    ("diversity", "Proporción de soluciones distintas muestreadas por el método poblacional en inferencia", "[0,1]", "mayor", "extensión (diagnóstico GFlowNet)"),
+    ("fallback", "1 si el exacto agotó el tiempo sin incumbente y reportó el constructivo de respaldo", "0/1", "menor", "interno (exactos)"),
+]
+
+
+def metrics_glossary() -> pd.DataFrame:
+    """Glosario de métricas como DataFrame (columna, definición, unidades,
+    dirección-mejor, fuente). Exportable a CSV para anexarlo a los resultados."""
+    return pd.DataFrame(GLOSSARY, columns=["metrica", "definicion", "unidades",
+                                           "mejor", "fuente"])
 
 
 def row_from_solution(solver: str, paradigm: int, size: int, instance: int,
@@ -46,15 +91,25 @@ def row_from_solution(solver: str, paradigm: int, size: int, instance: int,
         "det_cost": float(ex.get("det_cost", np.nan)),
         "expected_cost": float(ex.get("expected_cost", sol.total_cost)),
         "expected_total": float(ex.get("expected_total", sol.total_cost)),
+        "expected_recourse": float(ex.get("expected_recourse", np.nan)),
         "cvar": float(ex.get("cvar", np.nan)),
+        "var_alpha": float(ex.get("var_alpha", np.nan)),
         "feasibility": float(sol.feasibility),
         "cvr": float(sol.cvr),
         "robustness": float(sol.robustness),
+        "rob_var": float(ex.get("rob_var", np.nan)),
+        "total_std": float(ex.get("total_std", np.nan)),
+        "worst_total": float(ex.get("worst_total", np.nan)),
+        "best_total": float(ex.get("best_total", np.nan)),
+        "waiting_time": float(ex.get("waiting_time", getattr(sol, "waiting_time", np.nan) or np.nan)),
         "tw_violations": float(ex.get("tw_violations", np.nan)),
+        "n_realizations": float(ex.get("n_realizations", ex.get("realizations", np.nan))),
         "runtime": float(sol.runtime),
         "train_time_s": float(ex.get("train_time_s", np.nan)),
         "gap": float(ex.get("gap", np.nan)),
         "n_vehicles": int(used),
+        "diversity": float(ex.get("diversity", np.nan)),
+        "fallback": float(ex.get("fallback", np.nan)) if ex.get("fallback") is not None else np.nan,
     }
 
 
@@ -80,8 +135,10 @@ def aggregate_by_size(df: pd.DataFrame) -> pd.DataFrame:
 
 def leaderboard(df: pd.DataFrame, by: str = "expected_total") -> pd.DataFrame:
     """Tabla resumen por solver (promedio sobre todo el banco), ordenada por ``by``."""
-    num = ["expected_cost", "expected_total", "cvar", "feasibility", "cvr",
-           "robustness", "runtime", "n_vehicles"]
+    num = ["expected_cost", "expected_total", "expected_recourse", "cvar",
+           "var_alpha", "feasibility", "cvr", "robustness", "waiting_time",
+           "runtime", "n_vehicles"]
+    num = [c for c in num if c in df.columns]
     out = df.groupby("solver")[num].mean().reset_index().sort_values(by)
     return out.reset_index(drop=True)
 

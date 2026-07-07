@@ -362,19 +362,70 @@ def cvar(samples: np.ndarray, alpha: float = 0.95) -> float:
     return float(s[-k:].mean())
 
 
+def var_alpha(samples: np.ndarray, alpha: float = 0.95) -> float:
+    """VaR_alpha: cuantil alpha del costo (umbral del peor ``(1-alpha)``)."""
+    s = np.asarray(samples, dtype=np.float64)
+    if s.size == 0:
+        return 0.0
+    return float(np.quantile(s, alpha))
+
+
 @dataclass
 class StochasticScore:
-    expected_cost: float          # E[c]  tiempo de viaje (semántica SVRPBench)
+    """Suite de métricas por instancia. Núcleo alineado con SVRPBench (Heakl et
+    al. 2025, §4.1): TC→``expected_cost`` (Eq. 15), CVR→``cvr`` (Eq. 16),
+    FR→``feasibility`` (Eq. 17, aquí por realización; el promedio entre
+    instancias reproduce la FR del paper), ROB→``rob_var`` (Eq. 18, varianza) y
+    ``waiting_time`` (Fig. 4). Extensiones declaradas (recurso de 2ª etapa y
+    riesgo): E[c+Q], E[Q], CVaR/VaR, dispersión y extremos de c+Q."""
+
+    expected_cost: float          # E[c]  tiempo de viaje (TC, Eq. 15 del paper)
     expected_total: float         # E[c + Q]  costo con recurso de 2ª etapa
     cvar: float                   # CVaR_alpha(c + Q)
-    feasibility: float            # tasa de factibilidad en [0, 1]
-    cvr: float                    # tasa de violación de restricciones (%)
-    waiting_time: float
+    feasibility: float            # tasa de factibilidad en [0, 1] (FR, Eq. 17)
+    cvr: float                    # tasa de violación de restricciones % (Eq. 16)
+    waiting_time: float           # espera media por llegar antes de la apertura
     robustness: float             # desviación estándar de c entre realizaciones
-    tw_violations: float
+    tw_violations: float          # promedio de ventanas violadas por realización
     alpha: float
+    rob_var: float = float("nan")           # ROB del paper (Eq. 18): Var(c)
+    var_alpha: float = float("nan")         # VaR_alpha(c+Q) (cuantil alpha)
+    expected_recourse: float = float("nan")  # E[Q] = E[c+Q] − E[c]
+    total_std: float = float("nan")         # std(c+Q) entre realizaciones
+    worst_total: float = float("nan")       # max(c+Q) observado (peor escenario)
+    best_total: float = float("nan")        # min(c+Q) observado
+    n_realizations: int = 0                 # R escenarios CRN usados
     cost_samples: np.ndarray = field(repr=False, default=None)
     total_samples: np.ndarray = field(repr=False, default=None)
+
+    @classmethod
+    def from_samples(cls, costs: np.ndarray, totals: np.ndarray, feas: np.ndarray,
+                     cvrs: np.ndarray, waits: np.ndarray, twv: np.ndarray,
+                     alpha: float) -> "StochasticScore":
+        """Construye la suite completa desde las muestras CRN (único camino de
+        cálculo: ``score_routes`` y ``score_routes_multi`` delegan aquí)."""
+        costs = np.asarray(costs, dtype=np.float64)
+        totals = np.asarray(totals, dtype=np.float64)
+        return cls(
+            expected_cost=float(costs.mean()),
+            expected_total=float(totals.mean()),
+            cvar=cvar(totals, alpha),
+            feasibility=float(np.asarray(feas).mean()),
+            cvr=float(np.asarray(cvrs).mean()),
+            waiting_time=float(np.asarray(waits).mean()),
+            robustness=float(costs.std()),
+            tw_violations=float(np.asarray(twv).mean()),
+            alpha=alpha,
+            rob_var=float(costs.var()),
+            var_alpha=var_alpha(totals, alpha),
+            expected_recourse=float(totals.mean() - costs.mean()),
+            total_std=float(totals.std()),
+            worst_total=float(totals.max()) if totals.size else float("nan"),
+            best_total=float(totals.min()) if totals.size else float("nan"),
+            n_realizations=int(costs.size),
+            cost_samples=costs,
+            total_samples=totals,
+        )
 
     def as_extras(self) -> dict:
         return {
@@ -383,6 +434,14 @@ class StochasticScore:
             "cvar": self.cvar,
             "tw_violations": self.tw_violations,
             "alpha": self.alpha,
+            "rob_var": self.rob_var,
+            "var_alpha": self.var_alpha,
+            "expected_recourse": self.expected_recourse,
+            "total_std": self.total_std,
+            "worst_total": self.worst_total,
+            "best_total": self.best_total,
+            "n_realizations": self.n_realizations,
+            "waiting_time": self.waiting_time,
         }
 
 
@@ -488,19 +547,7 @@ def score_routes(
         costs = costs + fleet_cost
         totals = totals + fleet_cost
 
-    return StochasticScore(
-        expected_cost=float(costs.mean()),
-        expected_total=float(totals.mean()),
-        cvar=cvar(totals, alpha),
-        feasibility=float(feas.mean()),
-        cvr=float(cvrs.mean()),
-        waiting_time=float(waits.mean()),
-        robustness=float(costs.std()),
-        tw_violations=float(twv.mean()),
-        alpha=alpha,
-        cost_samples=costs,
-        total_samples=totals,
-    )
+    return StochasticScore.from_samples(costs, totals, feas, cvrs, waits, twv, alpha)
 
 
 def score_routes_multi(
@@ -557,17 +604,6 @@ def score_routes_multi(
             fleet = sum(1 for rt in routes if len(rt) > 0) * float(vehicle_fixed_cost)
             costs = costs + fleet
             totals = totals + fleet
-        out.append(StochasticScore(
-            expected_cost=float(costs.mean()),
-            expected_total=float(totals.mean()),
-            cvar=cvar(totals, alpha),
-            feasibility=float(a["feas"].mean()),
-            cvr=float(a["cvrs"].mean()),
-            waiting_time=float(a["waits"].mean()),
-            robustness=float(costs.std()),
-            tw_violations=float(a["twv"].mean()),
-            alpha=alpha,
-            cost_samples=costs,
-            total_samples=totals,
-        ))
+        out.append(StochasticScore.from_samples(
+            costs, totals, a["feas"], a["cvrs"], a["waits"], a["twv"], alpha))
     return out
