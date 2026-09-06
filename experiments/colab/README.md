@@ -246,6 +246,27 @@ Dos preguntas que deciden qué se puede afirmar en la tesis, y ninguna exige re-
 - `audit_runs(...)` verifica antes de comparar que todos los solvers usaron el mismo protocolo,
   buscaron de forma disjunta y terminaron sin fallos.
 
+## Revisar el estado de una corrida
+
+Después de ejecutar las libretas, este reporte resume en una pantalla si los
+resultados sirven, sin re-resolver nada:
+
+```bash
+python experiments/colab/scripts/report_runs.py --root "<env.paths.root>"
+```
+
+En Colab, desde una celda de cualquier notebook ya inicializado:
+
+```python
+!python {_path}/scripts/report_runs.py --root "{env.paths.root}"
+```
+
+Responde siete preguntas: qué solvers corrieron y sobre qué tamaños, si alguna
+instancia falló, si la búsqueda de cada solver fue **disjunta** de la evaluación,
+si todos usaron el mismo banco y el mismo protocolo, la cobertura por tamaño, si
+`ehbg-facs` supera a `facs-dist` **con el mismo presupuesto** (atribución), y si
+el CVaR aporta algo sobre la media en el régimen usado.
+
 ## Verificación local (sin GPU)
 
 ```bash
