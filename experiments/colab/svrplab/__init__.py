@@ -15,5 +15,6 @@ Flujo típico en un notebook:
     df = runner.run_solver("aco", bank, env, protocol.DEFAULT)
 """
 from . import bootstrap, protocol, stochastic, data  # noqa: F401
+from . import sensitivity  # noqa: F401
 
-__all__ = ["bootstrap", "protocol", "stochastic", "data"]
+__all__ = ["bootstrap", "protocol", "stochastic", "data", "sensitivity"]

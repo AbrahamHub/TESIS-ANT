@@ -39,6 +39,10 @@ METRIC_COLUMNS = [
     "n_vehicles",      # vehículos/rutas usadas
     "diversity",       # proporción de soluciones distintas muestreadas (métodos poblacionales); NaN si N/A
     "fallback",        # 1 si la ruta provino del constructivo de respaldo (exactos); 0/NaN si no
+    # --- Auditoría de la corrida (robustez y anti-fuga de escenarios) ---------
+    "error",           # "" si la instancia se resolvió; mensaje si falló (fila con métricas NaN)
+    "search_r_offset", # primera realización ξ vista por la BÚSQUEDA interna del solver
+    "search_budget",   # nº de candidatas que el solver puntuó y entre las que eligió
 ]
 
 # Glosario canónico: qué significa cada columna, en qué unidades, qué dirección
@@ -67,6 +71,9 @@ GLOSSARY = [
     ("n_vehicles", "Rutas/vehículos usados por la solución", "conteo", "informativa", "interno"),
     ("diversity", "Proporción de soluciones distintas muestreadas por el método poblacional en inferencia", "[0,1]", "mayor", "extensión (diagnóstico GFlowNet)"),
     ("fallback", "1 si el exacto agotó el tiempo sin incumbente y reportó el constructivo de respaldo", "0/1", "menor", "interno (exactos)"),
+    ("error", "Vacío si la instancia se resolvió; mensaje si falló. La fila se conserva con métricas NaN para que un fallo quede auditado y no desaparezca del conteo", "texto", "vacío", "interno (robustez)"),
+    ("search_r_offset", "Primera realización ξ que vio la BÚSQUEDA interna del solver. Debe ser >= R_eval: si vale 0, el solver seleccionó sobre los mismos escenarios con los que se le mide (sesgo de selección)", "índice", ">= R_eval", "interno (anti-fuga)"),
+    ("search_budget", "Nº de candidatas que el solver puntuó y entre las que eligió el mínimo. Comparar métodos poblacionales exige igualar este presupuesto", "conteo", "declarar e igualar", "interno (atribución)"),
 ]
 
 
@@ -110,6 +117,10 @@ def row_from_solution(solver: str, paradigm: int, size: int, instance: int,
         "n_vehicles": int(used),
         "diversity": float(ex.get("diversity", np.nan)),
         "fallback": float(ex.get("fallback", np.nan)) if ex.get("fallback") is not None else np.nan,
+        # Auditoría de la corrida (ver GLOSSARY): vacío = instancia resuelta.
+        "error": "",
+        "search_r_offset": float(ex.get("search_r_offset", np.nan)),
+        "search_budget": float(ex.get("search_budget", np.nan)),
     }
 
 
@@ -117,7 +128,9 @@ def to_dataframe(rows: List[Dict]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     for c in METRIC_COLUMNS:
         if c not in df.columns:
-            df[c] = np.nan
+            df[c] = "" if c == "error" else np.nan
+    if "error" in df.columns:
+        df["error"] = df["error"].fillna("").astype(str)
     return df[METRIC_COLUMNS]
 
 

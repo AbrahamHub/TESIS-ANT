@@ -178,10 +178,17 @@ def hbg_loss(out, logR, log_Z, lam: float, use_flow: bool):
 # --------------------------------------------------------------------------- #
 
 
-def _ant_construct(pher, eta, demand, cap, customers, rng, alpha_aco, beta_aco):
+def _ant_construct(pher, eta, demand, cap, customers, rng, alpha_aco, beta_aco,
+                   epi=None, kappa_epi=0.0):
     """Una hormiga construye una solución (lista de acciones: clientes y retornos al
-    depósito), muestreando el siguiente nodo ∝ τ_ACO^α · η^β con máscara de
-    factibilidad. Replica la regla de transición del Ant System (Dorigo)."""
+    depósito), muestreando el siguiente nodo ∝ τ_ACO^α · η^β · (1 + κ·u) con máscara
+    de factibilidad. Sin ``epi`` es exactamente la regla del Ant System (Dorigo).
+
+    ``epi`` (n,n) ∈ [0,1] es la **incertidumbre epistémica por arista** (dispersión
+    de η entre índices del epinet) y ``kappa_epi`` su peso. El factor (1 + κ·u)
+    sesga el muestreo hacia aristas poco exploradas: es el mecanismo que enuncia H3.
+    Con κ=0 el término desaparece y se recupera EHBG-FACS base — lo que hace que la
+    ablación con/sin ENN sea exacta y no una comparación entre modelos distintos."""
     n = pher.shape[0]
     depot = 0
     visited = np.zeros(n, dtype=bool)
@@ -200,6 +207,8 @@ def _ant_construct(pher, eta, demand, cap, customers, rng, alpha_aco, beta_aco):
                 seq.append(depot); cur = depot; rem = cap
             continue
         w = (pher[cur, cand] ** alpha_aco) * (eta[cur, cand] ** beta_aco)
+        if epi is not None and kappa_epi:
+            w = w * (1.0 + kappa_epi * epi[cur, cand])
         s = w.sum()
         p = w / s if s > 0 else np.ones_like(w) / w.size
         j = int(rng.choice(cand, p=p))
@@ -218,21 +227,30 @@ def _ant_task(args):
     ctx = _ANT_CTX
     rng = np.random.default_rng(np.random.SeedSequence([ctx["seed"], it, k]))
     seq = _ant_construct(pher, ctx["eta"], ctx["demand"], ctx["cap"], ctx["customers"],
-                         rng, ctx["alpha_aco"], ctx["beta_aco"])
+                         rng, ctx["alpha_aco"], ctx["beta_aco"],
+                         epi=ctx.get("epi"), kappa_epi=ctx.get("kappa_epi", 0.0))
     routes = T.split_routes(seq, 0)
     sc = stochastic.score_routes(
         ctx["instance"], routes, num_realizations=ctx["R"], seed=ctx["inst_seed"],
         alpha=ctx["alpha_cvar"], late_penalty=ctx["late_penalty"],
-        accident_scale=ctx["accident_scale"], scenarios=ctx["scens"])
+        accident_scale=ctx["accident_scale"], scenarios=ctx["scens"],
+        r_offset=ctx["r_offset"])
     return seq, routes, sc
 
 
 def aco_search(eta, instance, *, n_ants=12, n_iters=8, alpha_aco=1.0, beta_aco=2.0,
                rho=0.1, Q=1.0, elite=3, aco_realizations=30, seed=0, late_penalty=1.0,
-               accident_scale=1.0, alpha_cvar=0.95, n_jobs=1, trace=False):
+               accident_scale=1.0, alpha_cvar=0.95, n_jobs=1, trace=False,
+               r_offset=0, epi=None, kappa_epi=0.0):
     """ACO guiado por η con feromona; puntúa cada hormiga con CVaR (CRN, R reducido).
     Devuelve (mejor_rutas, mejor_score, pool) donde ``pool`` = trayectorias elite para el
     búfer de replay.
+
+    ``r_offset`` — **anti-fuga de escenarios**. La búsqueda puntúa sus candidatas sobre
+    ξ con r ∈ [r_offset, r_offset+aco_realizations). Con el valor del protocolo
+    (``proto.search_offset`` = R_eval) esos escenarios son **disjuntos** de los de
+    evaluación, de modo que elegir el argmin CVaR aquí no es seleccionar sobre la
+    muestra con la que después se mide el método.
 
     Eficiencia (idéntica en resultados): los escenarios ξ se **pre-muestrean una vez**
     (``presample_scenarios``) y se reutilizan para todas las hormigas (antes cada
@@ -249,14 +267,16 @@ def aco_search(eta, instance, *, n_ants=12, n_iters=8, alpha_aco=1.0, beta_aco=2
     inst_seed = int(instance.metadata.get("seed", seed))
 
     scens = stochastic.presample_scenarios(n, inst_seed, aco_realizations,
-                                           accident_scale=accident_scale)
+                                           accident_scale=accident_scale,
+                                           r_offset=r_offset)
     _ANT_CTX.clear()
     _ANT_CTX.update(dict(
         eta=eta, demand=demand, cap=cap, customers=customers, seed=int(seed),
         instance=instance, R=aco_realizations, inst_seed=inst_seed,
         alpha_cvar=alpha_cvar, late_penalty=late_penalty,
         accident_scale=accident_scale, alpha_aco=alpha_aco, beta_aco=beta_aco,
-        scens=scens))
+        scens=scens, r_offset=int(r_offset), epi=epi,
+        kappa_epi=float(kappa_epi)))
 
     jobs = effective_jobs(n_jobs)
     use_pool = (jobs > 1 and n_ants > 1 and not mp.current_process().daemon
@@ -268,7 +288,8 @@ def aco_search(eta, instance, *, n_ants=12, n_iters=8, alpha_aco=1.0, beta_aco=2
     best_routes, best_score, best_cost = None, None, np.inf
     pool = []
     hist = {"best_cvar": [], "iter_best_cvar": [], "iter_mean_cvar": [],
-            "unique_ratio": []}
+            "unique_ratio": [], "epi_mean": (float(np.mean(epi)) if epi is not None
+                                             else float("nan"))}
     try:
         for it in range(n_iters):
             tasks = [(it, k, pher) for k in range(n_ants)]
@@ -341,12 +362,13 @@ def _cvar_task(args):
 def _refine_task(args):
     """Refinamiento GFACS de una instancia del lote (worker fork; ACO secuencial
     dentro del worker — el paralelismo va por instancia)."""
-    eta, inst, aco_realizations, late_penalty, accident_scale, alpha_cvar = args
+    (eta, inst, aco_realizations, late_penalty, accident_scale, alpha_cvar,
+     r_offset) = args
     _, _, pool = aco_search(
         eta, inst, aco_realizations=aco_realizations,
         seed=int(inst.metadata.get("seed", 0)), late_penalty=late_penalty,
         accident_scale=accident_scale, alpha_cvar=alpha_cvar,
-        n_ants=8, n_iters=4, n_jobs=1)
+        n_ants=8, n_iters=4, n_jobs=1, r_offset=r_offset)
     return sorted(pool, key=lambda a: a[1])[:2]
 
 
@@ -355,7 +377,7 @@ def train_ehbg_facs(train_sizes=(10, 20), n_train=64, epochs=40, embed_dim=128, 
                     aco_realizations=30, train_realizations=30, refine_every=5,
                     replay_ratio=0.5, buffer_size=8, epinet=False, base_seed=77000,
                     device="cpu", late_penalty=1.0, accident_scale=1.0, alpha_cvar=0.95,
-                    n_jobs=1, verbose=True):
+                    n_jobs=1, verbose=True, epi_prior_scale=1.0, search_r_offset=0):
     """Entrena la GFlowNet HBG con recompensa CVaR + refinamiento GFACS + replay off-policy.
 
     Banco de entrenamiento **fijo** (semillas disjuntas del banco de evaluación) para que
@@ -369,7 +391,7 @@ def train_ehbg_facs(train_sizes=(10, 20), n_train=64, epochs=40, embed_dim=128, 
     torch.manual_seed(base_seed)
     model = T.AttentionModel(embed_dim=embed_dim, n_heads=n_heads, n_layers=n_layers,
                              use_flow=True, use_backward=True, use_heuristic=True,
-                             epinet=epinet).to(device)
+                             epinet=epinet, epi_prior_scale=epi_prior_scale).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
 
     # Banco de entrenamiento fijo, agrupado por tamaño.
@@ -416,7 +438,8 @@ def train_ehbg_facs(train_sizes=(10, 20), n_train=64, epochs=40, embed_dim=128, 
                     tops = process_map(
                         _refine_task,
                         [(etas[b], binsts[b], aco_realizations, late_penalty,
-                          accident_scale, alpha_cvar) for b in range(B)],
+                          accident_scale, alpha_cvar, search_r_offset)
+                         for b in range(B)],
                         n_jobs=n_jobs)
                     for b in range(B):
                         buf = buffer.setdefault(id(binsts[b]), deque(maxlen=buffer_size))
@@ -472,7 +495,8 @@ class EHBGFACS(Solver):
                  infer_ants=16, infer_iters=12, infer_realizations=40, alpha_aco=1.0,
                  beta_aco=2.0, rho=0.1, device="cpu", default_realizations=200, alpha=0.95,
                  late_penalty=1.0, accident_scale=1.0, train_seed=77000, models_dir=None,
-                 cache=True, n_jobs=1, verbose=True):
+                 cache=True, n_jobs=1, verbose=True, search_r_offset=None,
+                 kappa_epi=0.0, epi_index_samples=8, epi_prior_scale=1.0):
         self.train_sizes = tuple(train_sizes)
         self.n_train = n_train
         self.epochs = epochs
@@ -502,9 +526,30 @@ class EHBGFACS(Solver):
         self.cache = cache
         self.n_jobs = n_jobs
         self.verbose = verbose
+        # Anti-fuga de escenarios: la búsqueda GFACS puntúa sus candidatas sobre
+        # ξ con r >= search_r_offset. Por defecto = default_realizations (= R de
+        # evaluación), de modo que búsqueda y evaluación son DISJUNTAS. Pasar 0
+        # reproduce el comportamiento sesgado, sólo para cuantificar el sesgo.
+        self.search_r_offset = (int(default_realizations) if search_r_offset is None
+                                else int(search_r_offset))
+        # ENN (H3): peso del bono epistémico en la regla de transición del ACO y
+        # nº de índices z con que se estima la dispersión. κ=0 desactiva el bono.
+        self.kappa_epi = float(kappa_epi)
+        self.epi_index_samples = int(epi_index_samples)
+        self.epi_prior_scale = float(epi_prior_scale)
         self._model = None
         self._train_time = 0.0
         self.history = {}
+
+    def _eta_for(self, instance):
+        """Devuelve ``(η, u)``: matriz heurística a priori que siembra el ACO y la
+        incertidumbre epistémica por arista (``None`` si no hay epinet).
+
+        La clase base la toma de la GFlowNet entrenada; ``FACSDistancePrior`` la
+        sustituye por 1/d; ``EHBGFACSEpistemic`` promedia sobre índices del epinet y
+        devuelve además su dispersión."""
+        feat, _, _, _ = T.instance_tensors([instance], self.device)
+        return _eta_numpy(self._model, feat, self.device), None
 
     def _model_path(self) -> Path:
         sz = "-".join(str(s) for s in self.train_sizes)
@@ -521,7 +566,8 @@ class EHBGFACS(Solver):
             self._model = T.AttentionModel(embed_dim=self.embed_dim, n_heads=self.n_heads,
                                            n_layers=self.n_layers, use_flow=True,
                                            use_backward=True, use_heuristic=True,
-                                           epinet=self.epinet).to(self.device)
+                                           epinet=self.epinet,
+                                           epi_prior_scale=self.epi_prior_scale).to(self.device)
             self._model.load_state_dict(torch.load(path, map_location=self.device))
             self._model.eval()
             if self.verbose:
@@ -536,7 +582,9 @@ class EHBGFACS(Solver):
             train_realizations=self.train_realizations, refine_every=self.refine_every,
             epinet=self.epinet, base_seed=self.train_seed, device=self.device,
             late_penalty=self.late_penalty, accident_scale=self.accident_scale,
-            alpha_cvar=self.alpha, n_jobs=self.n_jobs, verbose=self.verbose)
+            alpha_cvar=self.alpha, n_jobs=self.n_jobs, verbose=self.verbose,
+            epi_prior_scale=self.epi_prior_scale,
+            search_r_offset=self.search_r_offset)
         self._train_time = time.time() - t0
         if self.cache:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -545,16 +593,16 @@ class EHBGFACS(Solver):
     def solve(self, instance: Instance, *, num_realizations: int = 1) -> Solution:
         self.ensure_model()
         depot = int(instance.metadata.get("depot_index", 0))
-        feat, demand, cap, _ = T.instance_tensors([instance], self.device)
         t0 = time.time()
-        eta = _eta_numpy(self._model, feat, self.device)
+        eta, epi = self._eta_for(instance)
         routes, _, _, search_hist = aco_search(
             eta, instance, n_ants=self.infer_ants, n_iters=self.infer_iters,
             alpha_aco=self.alpha_aco, beta_aco=self.beta_aco, rho=self.rho,
             aco_realizations=self.infer_realizations,
             seed=int(instance.metadata.get("seed", 0)), late_penalty=self.late_penalty,
             accident_scale=self.accident_scale, alpha_cvar=self.alpha,
-            n_jobs=self.n_jobs, trace=True)
+            n_jobs=self.n_jobs, trace=True, r_offset=self.search_r_offset,
+            epi=epi, kappa_epi=(self.kappa_epi if epi is not None else 0.0))
         infer_time = time.time() - t0
         routes = routes or []
 
@@ -565,9 +613,16 @@ class EHBGFACS(Solver):
             late_penalty=self.late_penalty, accident_scale=self.accident_scale, depot=depot)
         extras = score.as_extras()
         extras.update({"n_routes": len(routes), "realizations": Rz,
-                       "train_time_s": self._train_time, "method": "EHBG-FACS",
+                       "train_time_s": self._train_time, "method": self.name,
                        "lambda_db": self.lam_db, "temperature": self.temperature,
                        "epistemic": self.epinet, "train_sizes": list(self.train_sizes),
+                       # Auditoría anti-fuga: rangos de ξ de búsqueda vs evaluación.
+                       "search_r_offset": self.search_r_offset,
+                       "search_realizations": self.infer_realizations,
+                       "search_disjoint": bool(self.search_r_offset >= Rz),
+                       "search_budget": int(self.infer_ants * self.infer_iters),
+                       "kappa_epi": (self.kappa_epi if epi is not None else 0.0),
+                       "epi_mean": search_hist.get("epi_mean", float("nan")),
                        "search_trace": search_hist,
                        "diversity": (float(np.mean(search_hist["unique_ratio"]))
                                      if search_hist["unique_ratio"] else float("nan"))})
@@ -576,8 +631,69 @@ class EHBGFACS(Solver):
                         waiting_time=score.waiting_time, robustness=score.robustness, extras=extras)
 
 
+class FACSDistancePrior(EHBGFACS):
+    """Ablación de atribución (d): **mismo presupuesto, sin red neuronal**.
+
+    Reemplaza la matriz heurística aprendida η por el prior clásico del Ant System
+    η_ij = 1/d_ij, y **conserva todo lo demás idéntico** a ``EHBGFACS``: mismo número
+    de hormigas e iteraciones, misma regla de transición τ^α·η^β, misma actualización
+    de feromona por CVaR, misma puntuación de candidatas sobre los MISMOS escenarios
+    de búsqueda disjuntos, misma selección del argmin.
+
+    Para qué sirve. Si ``ehbg-facs`` no supera a ``facs-dist``, la ventaja frente a
+    los baselines no proviene de la GFlowNet sino del presupuesto de búsqueda y de la
+    selección sensible al riesgo. Es el control que un sinodal pide primero, y el que
+    convierte cualquier resultado positivo en atribuible. No entrena ni carga modelo,
+    así que corre en CPU y en segundos.
+    """
+    name = "facs-dist"
+    epinet = False
+
+    def ensure_model(self):      # no hay modelo que entrenar ni cargar
+        self._model = None
+        self._train_time = 0.0
+
+    def _eta_for(self, instance):
+        """η = 1/d (prior de distancia del Ant System), normalizada a (0, 1]."""
+        locs = np.asarray(instance.locations, dtype=np.float64)
+        d = stochastic.euclidean_int_matrix(locs)
+        with np.errstate(divide="ignore"):
+            eta = 1.0 / np.maximum(d, 1e-9)
+        np.fill_diagonal(eta, 0.0)
+        mx = float(eta.max()) or 1.0
+        return np.clip(eta / mx, 1e-6, 1.0), None
+
+
 class EHBGFACSEpistemic(EHBGFACS):
-    """Extensión epistémica (Fase 5): activa la cabeza ENN (epinet) para guiar la
-    exploración con incertidumbre epistémica."""
+    """Extensión epistémica (Fase 5) — H3, implementada de extremo a extremo.
+
+    Tres piezas, las tres necesarias para que H3 sea contrastable:
+
+    1. **Epinet con red a priori congelada** (``models.transformer``), que es la que
+       genera incertidumbre antes de ver datos (Osband et al.). Sin ella la
+       "incertidumbre" es ruido entrenable que el ajuste puede anular.
+    2. **η indexada por z**: la incertidumbre llega a la matriz que siembra el ACO,
+       no sólo a los logits de entrenamiento. Se muestrean ``epi_index_samples``
+       índices y se usa la **media** como η y la **desviación estándar** como señal
+       epistémica por arista.
+    3. **Bono explícito de exploración**: el ACO muestrea ∝ τ^α·η^β·(1+κ·u), de modo
+       que la incertidumbre *guía* el muestreo. Con ``kappa_epi=0`` el bono se apaga
+       y queda exactamente EHBG-FACS base: la ablación con/sin ENN es limpia.
+    """
     name = "ehbg-facs-enn"
     epinet = True
+
+    def __init__(self, *args, kappa_epi=0.5, **kw):
+        super().__init__(*args, kappa_epi=kappa_epi, **kw)
+
+    def _eta_for(self, instance):
+        import torch
+        feat, _, _, _ = T.instance_tensors([instance], self.device)
+        with torch.no_grad():
+            emb, _ = self._model.encode(feat)
+            mean, std = self._model.heuristic_ensemble(emb, n_index=self.epi_index_samples)
+        eta = mean[0].detach().cpu().numpy()
+        u = std[0].detach().cpu().numpy()
+        mx = float(u.max())
+        u = u / mx if mx > 1e-12 else np.zeros_like(u)   # dispersión normalizada a [0,1]
+        return eta, u

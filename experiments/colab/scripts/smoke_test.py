@@ -75,6 +75,49 @@ def main():
                             verbose=True)
     results["ehbg-facs-enn"] = runner.run_solver(een, "ehbg-facs-enn", bank, env, proto, verbose=True)
 
+    print("\n== P5 facs-dist (ablación de atribución: mismo presupuesto, sin red) ==")
+    from svrplab.solvers.ehbg_facs import FACSDistancePrior
+    fd = FACSDistancePrior(infer_ants=6, infer_iters=3, infer_realizations=15,
+                           device="cpu", default_realizations=proto.realizations,
+                           verbose=True)
+    results["facs-dist"] = runner.run_solver(fd, "facs-dist", bank, env, proto, verbose=True)
+
+    print("\n== invariantes del protocolo (anti-fuga) ==")
+    import json
+    meta = runner.load_run_meta(env)
+    fugados = []
+    for sv, m in meta.items():
+        rg = m.get("scenario_ranges", {})
+        ev, se = rg.get("eval"), rg.get("search")
+        if not rg.get("disjoint") or (ev and se and se[0] < ev[1]):
+            fugados.append(sv)
+        print(f"  {sv:16} eval={ev} busqueda={se} disjunta={rg.get('disjoint')}")
+    assert not fugados, f"FUGA DE ESCENARIOS en: {fugados}"
+    print("  -> ningun solver selecciona sobre los escenarios de evaluacion")
+
+    print("\n== robustez del runner (reanudacion / aislamiento de fallos) ==")
+    n_before = len(results["facs-dist"])
+    again = runner.run_solver(fd, "facs-dist", bank, env, proto, verbose=False)
+    assert len(again) == n_before, "la reanudacion cambio el numero de filas"
+    print(f"  reanudacion OK: {len(again)} filas recuperadas del checkpoint sin recalcular")
+
+    class _Boom:
+        device = "cpu"
+        def solve(self, inst, *, num_realizations=1):
+            raise RuntimeError("fallo inyectado")
+    bad = runner.run_solver(_Boom(), "tabu", bank, env, proto, verbose=False,
+                            resume=False, save=False)
+    assert len(bad) == sum(len(v) for v in bank.values()) and (bad["error"] != "").all()
+    print(f"  aislamiento OK: {len(bad)} instancias fallidas anotadas, la corrida no se detuvo")
+
+    print("\n== sensibilidad: regimen de riesgo ==")
+    from svrplab import sensitivity
+    insts = {f"10:{i}": bank[10][i] for i in range(len(bank[10]))}
+    rutas = runner.load_routes(env, "aco") or runner.load_routes(env, "facs-dist")
+    if rutas:
+        sensitivity.risk_regime_sweep(insts, rutas, proto, scales=(1.0, 50.0, 500.0),
+                                      solver_name="smoke")
+
     print("\n== agregación + estadística ==")
     import pandas as pd
     alldf = pd.concat(results.values(), ignore_index=True)

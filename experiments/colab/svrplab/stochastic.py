@@ -136,15 +136,23 @@ def sample_scenario(n: int, base_seed: int, r: int, n_buckets: int = 24,
 
 
 def presample_scenarios(n: int, base_seed: int, num_realizations: int, *,
-                        n_buckets: int = 24, accident_scale: float = 1.0) -> List["Scenario"]:
-    """Pre-muestrea la lista completa de escenarios ξ (r = 0..R−1) de una instancia.
+                        n_buckets: int = 24, accident_scale: float = 1.0,
+                        r_offset: int = 0) -> List["Scenario"]:
+    """Pre-muestrea la lista de escenarios ξ (r = r_offset .. r_offset+R−1).
 
-    Idéntico bit a bit a lo que ``score_routes`` muestrearía internamente: sirve
-    como **cache CRN** cuando se puntúan muchas rutas de la MISMA instancia (p. ej.
-    las hormigas del GFACS), evitando re-muestrear el mismo ruido cientos de veces.
+    Idéntico bit a bit a lo que ``score_routes`` muestrearía internamente con el
+    mismo ``r_offset``: sirve como **cache CRN** cuando se puntúan muchas rutas de
+    la MISMA instancia (p. ej. las hormigas del GFACS), evitando re-muestrear el
+    mismo ruido cientos de veces.
     Memoria: ~``2·n²·n_buckets·8`` bytes por realización (≈35 MB a n=300, B=24).
+
+    ``r_offset`` — **separación búsqueda/evaluación**. La evaluación homologada usa
+    siempre r ∈ [0, R_eval). Un solver que puntúe internamente sus candidatas debe
+    usar r ∈ [R_eval, R_eval+R_search) para NO seleccionar sobre los mismos
+    escenarios con los que después se le mide (sesgo de selección en la muestra).
+    Ver ``protocol.Protocol.search_offset``.
     """
-    return [sample_scenario(n, base_seed, r, n_buckets=n_buckets,
+    return [sample_scenario(n, base_seed, r_offset + r, n_buckets=n_buckets,
                             accident_scale=accident_scale)
             for r in range(num_realizations)]
 
@@ -487,6 +495,7 @@ def score_routes(
     vectorized: bool = True,
     chunk: int = 32,
     scenarios: List[Scenario] = None,
+    r_offset: int = 0,
 ) -> StochasticScore:
     """Puntúa ``routes`` sobre ``num_realizations`` escenarios CRN.
 
@@ -501,8 +510,12 @@ def score_routes(
     adaptativa con el tamaño de la instancia, ver ``_memory_capped_chunk``).
 
     ``scenarios``: cache CRN opcional producido por ``presample_scenarios(n, seed, R)``
-    **con los mismos parámetros**; evita re-muestrear ξ al puntuar muchas rutas de la
-    misma instancia. El resultado es idéntico bit a bit al muestreo interno.
+    **con los mismos parámetros** (incluido ``r_offset``); evita re-muestrear ξ al
+    puntuar muchas rutas de la misma instancia. Idéntico bit a bit al muestreo interno.
+
+    ``r_offset``: desplaza el rango de realizaciones a r ∈ [r_offset, r_offset+R).
+    La **evaluación homologada usa siempre 0**; la búsqueda interna de un solver debe
+    usar un offset ≥ R_eval para no seleccionar sobre los escenarios de evaluación.
     """
     n, dist, demands, caps, tw, appear, customers = _prepare(instance, depot)
     n_customers = max(1, len(customers))
@@ -518,7 +531,7 @@ def score_routes(
         for lo in range(0, R, chunk):
             hi = min(R, lo + chunk)
             scens = (scenarios[lo:hi] if scenarios is not None else
-                     [sample_scenario(n, seed, r, n_buckets=n_buckets,
+                     [sample_scenario(n, seed, r_offset + r, n_buckets=n_buckets,
                                       accident_scale=accident_scale) for r in range(lo, hi)])
             c, w, rec, tv, fe, vio = _simulate_vectorized(
                 routes, depot, dist, demands, caps, tw, appear, customers,
@@ -532,7 +545,8 @@ def score_routes(
     else:
         for r in range(R):
             scen = (scenarios[r] if scenarios is not None else
-                    sample_scenario(n, seed, r, n_buckets=n_buckets, accident_scale=accident_scale))
+                    sample_scenario(n, seed, r_offset + r, n_buckets=n_buckets,
+                                    accident_scale=accident_scale))
             res = _simulate(routes, depot, dist, demands, caps, tw, appear, customers,
                             late_penalty, scen)
             costs[r] = res.travel_cost
@@ -563,6 +577,7 @@ def score_routes_multi(
     depot: int = 0,
     n_buckets: int = 24,
     chunk: int = 32,
+    r_offset: int = 0,
 ) -> List[StochasticScore]:
     """Puntúa VARIAS soluciones de la MISMA instancia compartiendo el muestreo ξ.
 
@@ -582,7 +597,7 @@ def score_routes_multi(
     chunk = _memory_capped_chunk(n, n_buckets, chunk)
     for lo in range(0, R, chunk):
         hi = min(R, lo + chunk)
-        scens = [sample_scenario(n, seed, r, n_buckets=n_buckets,
+        scens = [sample_scenario(n, seed, r_offset + r, n_buckets=n_buckets,
                                  accident_scale=accident_scale) for r in range(lo, hi)]
         for k, routes in enumerate(routes_list):
             c, w, rec, tv, fe, vio = _simulate_vectorized(

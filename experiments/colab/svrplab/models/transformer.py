@@ -72,7 +72,8 @@ def _build():
                      n_heads: int = 8, n_layers: int = 3, ff_dim: int = 512,
                      clip: float = 10.0, use_flow: bool = False,
                      use_backward: bool = False, use_heuristic: bool = False,
-                     epinet: bool = False, epi_index_dim: int = 8):
+                     epinet: bool = False, epi_index_dim: int = 8,
+                     epi_prior_scale: float = 1.0):
             super().__init__()
             self.embed_dim = embed_dim
             self.n_heads = n_heads
@@ -107,11 +108,25 @@ def _build():
             if use_heuristic:
                 self.heur_q = nn.Linear(embed_dim, embed_dim, bias=False)
                 self.heur_k = nn.Linear(embed_dim, embed_dim, bias=False)
-            # Epinet (ENN): perturbación indexada de la capa final para incertidumbre.
+            # Epinet (ENN, Osband et al.): epinet(x,z) = entrenable(x,z) + prior(x,z),
+            # donde `prior` es una red ALEATORIA y CONGELADA. Esa red fija es la que
+            # genera incertidumbre epistémica antes de ver datos: sin ella la
+            # "incertidumbre" es sólo ruido entrenable que el ajuste puede anular.
             if epinet:
                 self.epi = nn.Sequential(
                     nn.Linear(embed_dim + epi_index_dim, embed_dim), nn.GELU(),
                     nn.Linear(embed_dim, embed_dim))
+                self.epi_prior = nn.Sequential(
+                    nn.Linear(embed_dim + epi_index_dim, embed_dim), nn.GELU(),
+                    nn.Linear(embed_dim, embed_dim))
+                for q in self.epi_prior.parameters():   # prior congelado
+                    q.requires_grad_(False)
+                # Escala del prior: controla cuánta incertidumbre epistémica a priori.
+                self.epi_prior_scale = float(epi_prior_scale)
+                # η epistémica: proyección indexada de la cabeza heurística, para que
+                # la incertidumbre llegue TAMBIÉN a la matriz que siembra el ACO.
+                if use_heuristic:
+                    self.epi_heur = nn.Linear(embed_dim + epi_index_dim, embed_dim)
 
         # ---- codificación ---------------------------------------------------
         def encode(self, feat):
@@ -129,7 +144,9 @@ def _build():
                                 key_padding_mask=attn_mask, need_weights=False)
             g = g.squeeze(1)                                   # (B,H)
             if self.epinet and epi_z is not None:
-                g = g + self.epi(torch.cat([g.detach(), epi_z], dim=1))
+                gz = torch.cat([g.detach(), epi_z], dim=1)
+                # entrenable + prior congelado (el gradiente no cruza a la base)
+                g = g + self.epi(gz) + self.epi_prior_scale * self.epi_prior(gz)
             k = self.k_proj(emb)                               # (B,n,H)
             logits = torch.einsum("bh,bnh->bn", g, k) / (self.embed_dim ** 0.5)
             logits = self.clip * torch.tanh(logits)
@@ -146,12 +163,41 @@ def _build():
             scores = (self.back_head(emb) * emb).sum(-1) / (self.embed_dim ** 0.5)
             return scores.masked_fill(~present_mask, float("-inf"))
 
-        def heuristic_matrix(self, emb):
-            """Matriz heurística a priori η (B,n,n) ≥ 0 para el ACO (GFACS)."""
+        def heuristic_matrix(self, emb, *, epi_z=None):
+            """Matriz heurística a priori η (B,n,n) ≥ 0 para el ACO (GFACS).
+
+            Con ``epi_z`` (B, epi_index_dim) y epinet activo, η queda **indexada por
+            z**: cada índice produce una η distinta. Es lo que permite que la
+            incertidumbre epistémica llegue a la inferencia — antes el epinet sólo
+            perturbaba los logits de entrenamiento y era inerte al muestrear con ACO.
+            """
             import torch
+            if self.epinet and epi_z is not None and hasattr(self, "epi_heur"):
+                n = emb.shape[1]
+                zz = epi_z.unsqueeze(1).expand(-1, n, -1)
+                emb = emb + self.epi_heur(torch.cat([emb.detach(), zz], dim=2))
             q = self.heur_q(emb); k = self.heur_k(emb)
             logits = torch.einsum("bih,bjh->bij", q, k) / (self.embed_dim ** 0.5)
             return torch.sigmoid(self.clip * torch.tanh(logits)) + 1e-6
+
+        def heuristic_ensemble(self, emb, n_index: int = 8, generator=None):
+            """Devuelve (η_media, η_std) sobre ``n_index`` índices epistémicos z.
+
+            ``η_std`` es la **señal epistémica por arista**: alta donde el modelo no
+            sabe. El GFACS la usa como bono explícito de exploración, que es lo que
+            H3 afirma y lo que el muestreo por sí solo no hacía.
+            """
+            import torch
+            if not self.epinet:
+                eta = self.heuristic_matrix(emb)
+                return eta, torch.zeros_like(eta)
+            outs = []
+            for _ in range(int(n_index)):
+                z = torch.randn(emb.shape[0], self.epi_index_dim, device=emb.device,
+                                generator=generator)
+                outs.append(self.heuristic_matrix(emb, epi_z=z))
+            stack = torch.stack(outs, 0)
+            return stack.mean(0), stack.std(0)
 
     return AttentionModel
 

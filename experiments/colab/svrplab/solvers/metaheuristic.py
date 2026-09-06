@@ -39,12 +39,18 @@ class _LegacyMetaheuristic(Solver):
 
     def __init__(self, *, default_realizations: int = 200, alpha: float = 0.95,
                  late_penalty: float = 1.0, accident_scale: float = 1.0,
-                 n_seeds: int = 5):
+                 n_seeds: int = 5, search_r_offset: int = None,
+                 search_realizations: int = 40):
         self.default_realizations = default_realizations
         self.alpha = alpha
         self.late_penalty = late_penalty
         self.accident_scale = accident_scale
         self.n_seeds = max(1, n_seeds)
+        # Anti-fuga: la SELECCIÓN best-of-K se hace sobre ξ de validación disjuntos
+        # de los de evaluación (por defecto, a partir de r = default_realizations).
+        self.search_r_offset = (int(default_realizations) if search_r_offset is None
+                                else int(search_r_offset))
+        self.search_realizations = int(search_realizations)
 
     def _apply_params(self, legacy) -> None:
         """Las subclases fijan los hiperparámetros del solver heredado."""
@@ -75,16 +81,29 @@ class _LegacyMetaheuristic(Solver):
             routes = self._strip(res.get("routes", []), depot)
             searches.append((routes, rt, float(res.get("total_cost", float("nan")))))
 
-        # Puntuación CRN de las K corridas compartiendo el muestreo ξ por chunk
-        # (idéntico a puntuar una por una; el muestreo cuesta 1/K).
+        # SELECCIÓN best-of-K sobre escenarios ξ **de validación**, disjuntos de los
+        # de evaluación (r >= search_r_offset). Elegir la mejor de K corridas usando
+        # los mismos ξ con los que después se mide el método es seleccionar sobre la
+        # muestra de prueba: infla el resultado con sesgo de selección. Aquí la
+        # elección se hace fuera de esa muestra y la métrica reportada se recalcula
+        # después sobre r ∈ [0, R).
+        cand_routes = [r for r, _, _ in searches]
+        val = stochastic.score_routes_multi(
+            instance, cand_routes, num_realizations=self.search_realizations,
+            seed=base_seed, alpha=self.alpha, late_penalty=self.late_penalty,
+            accident_scale=self.accident_scale, depot=depot,
+            r_offset=self.search_r_offset)
+        k_best = min(range(len(cand_routes)), key=lambda k: val[k].expected_total)
+
+        # MEDICIÓN de las K corridas sobre los ξ de evaluación (para reportar la
+        # dispersión entre semillas y las métricas de la corrida elegida).
         scores = stochastic.score_routes_multi(
-            instance, [r for r, _, _ in searches], num_realizations=R, seed=base_seed,
+            instance, cand_routes, num_realizations=R, seed=base_seed,
             alpha=self.alpha, late_penalty=self.late_penalty,
             accident_scale=self.accident_scale, depot=depot)
         runs = [(sc, routes, rt, lc) for sc, (routes, rt, lc) in zip(scores, searches)]
 
-        best = min(runs, key=lambda r: r[0].expected_total)
-        best_score, best_routes, _, best_legacy = best
+        best_score, best_routes, _, best_legacy = runs[k_best]
         ec = [r[0].expected_cost for r in runs]
         fe = [r[0].feasibility for r in runs]
 
@@ -94,7 +113,11 @@ class _LegacyMetaheuristic(Solver):
             "seed_std_feasibility": pstdev(fe) if len(fe) > 1 else 0.0,
             "n_seeds": self.n_seeds, "n_routes": len(best_routes),
             "legacy_cost": best_legacy, "realizations": R,
-            "aggregation": "best-of-K (mín E[c+Q])",
+            "aggregation": "best-of-K (mín E[c+Q] en ξ de validación)",
+            "search_r_offset": self.search_r_offset,
+            "search_realizations": self.search_realizations,
+            "search_disjoint": bool(self.search_r_offset >= R),
+            "search_budget": int(self.n_seeds),
         })
         return Solution(routes=best_routes, total_cost=best_score.expected_cost,
                         runtime=sum(r[2] for r in runs), feasibility=best_score.feasibility,

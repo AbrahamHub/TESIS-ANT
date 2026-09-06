@@ -1,3 +1,6 @@
 .DS_Store
 ./claude
 .claude/settings.local.json
+# Artefactos de compilación de Python (ensucian todos los diffs)
+__pycache__/
+*.py[cod]

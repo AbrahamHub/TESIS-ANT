@@ -36,77 +36,238 @@ def notebook(cells):
 # Bloques reutilizables
 # --------------------------------------------------------------------------- #
 
-SETUP_CODE = '''
+SETUP_CODE = r'''
 # === Configuración del entorno (ejecuta esta celda primero) =================
-# Requiere: (a) el paquete `svrplab` (carpeta experiments/colab del repo de tesis)
-#           (b) el repo oficial de SVRPBench (se clona solo en bootstrap.init()).
+# Deja el entorno listo y VERIFICA que lo está: si algo falta, esta celda falla
+# aquí con un mensaje accionable en vez de reventar 40 minutos después dentro de
+# un solver. Es idempotente: puedes re-ejecutarla sin efectos secundarios.
 REPO_URL  = "https://github.com/AbrahaHub/TESIS-ANT"   # <-- EDITA si tu repo difiere
 USE_DRIVE = True   # persistir banco/resultados/modelos en Google Drive (recomendado)
 
-import os, sys, subprocess
+import os, sys, subprocess, importlib
 
-if USE_DRIVE:
+IN_COLAB = "google.colab" in sys.modules or os.path.isdir("/content")
+
+# --- 1) Drive: montar Y COMPROBAR QUE SE PUEDE ESCRIBIR --------------------
+# En Colab, montar no garantiza permiso de escritura (cuota llena, montaje en
+# solo lectura). Se prueba de verdad: sin persistencia, una desconexión borra
+# horas de cómputo.
+DRIVE_OK = False
+if USE_DRIVE and IN_COLAB:
     try:
         from google.colab import drive
         drive.mount("/content/drive")
+        probe = "/content/drive/MyDrive/.svrplab_write_test"
+        with open(probe, "w") as fh:
+            fh.write("ok")
+        os.remove(probe)
+        DRIVE_OK = True
+        print("Drive montado y con permiso de escritura")
     except Exception as e:
-        print("Drive no disponible (¿ejecutas local?):", e)
+        print("AVISO: Drive no utilizable (%s).\n"
+              "       Los resultados quedarán SOLO en el disco efímero de la sesión:\n"
+              "       si Colab se desconecta, se pierden. Descárgalos al terminar." % e)
+elif USE_DRIVE:
+    print("No estás en Colab: se usará el disco local (persistente).")
 
+# --- 2) Localizar el paquete svrplab --------------------------------------
+# Orden de búsqueda: (a) ya importable, (b) rutas habituales de Colab/Drive,
+# (c) subiendo desde el directorio actual (clon local del repo), (d) clonar.
 def _find_svrplab():
+    if importlib.util.find_spec("svrplab") is not None:
+        return os.path.dirname(os.path.dirname(
+            importlib.util.find_spec("svrplab").origin))
     cands = ["/content/drive/MyDrive/TESIS-ANT/experiments/colab",
              "/content/TESIS-ANT/experiments/colab",
              os.path.join(os.getcwd(), "experiments", "colab"),
              os.getcwd()]
+    here = os.path.abspath(os.getcwd())
+    for _ in range(5):          # sube hasta 5 niveles buscando el clon local
+        cands.append(os.path.join(here, "experiments", "colab"))
+        cands.append(here)
+        here = os.path.dirname(here)
     for c in cands:
         if os.path.isdir(os.path.join(c, "svrplab")):
             return c
     return None
 
+import importlib.util
 _path = _find_svrplab()
 if _path is None:
-    subprocess.run(["git", "clone", "--depth", "1", REPO_URL, "/content/TESIS-ANT"], check=False)
-    _path = "/content/TESIS-ANT/experiments/colab"
-sys.path.insert(0, _path)
+    print("svrplab no encontrado localmente; clonando", REPO_URL)
+    _dest = "/content/TESIS-ANT" if IN_COLAB else os.path.join(os.getcwd(), "TESIS-ANT")
+    subprocess.run(["git", "clone", "--depth", "1", REPO_URL, _dest], check=False)
+    _path = os.path.join(_dest, "experiments", "colab")
+if not os.path.isdir(os.path.join(_path, "svrplab")):
+    raise RuntimeError(
+        "No encuentro el paquete `svrplab`.\n"
+        "Arreglo: (a) corrige REPO_URL arriba, o (b) copia la carpeta "
+        "experiments/colab del repo a MyDrive/TESIS-ANT/ y re-ejecuta.")
+if _path not in sys.path:
+    sys.path.insert(0, _path)
 print("svrplab en:", _path)
 
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "numpy", "scipy", "pandas",
-                "matplotlib", "scikit-learn", "pillow", "tqdm"], check=False)
+# --- 3) Dependencias -------------------------------------------------------
+_REQ = ["numpy", "scipy", "pandas", "matplotlib", "scikit-learn", "pillow", "tqdm"]
+_falta = []
+for mod, pkg in [("numpy","numpy"), ("scipy","scipy"), ("pandas","pandas"),
+                 ("matplotlib","matplotlib"), ("sklearn","scikit-learn"),
+                 ("PIL","pillow"), ("tqdm","tqdm")]:
+    try:
+        importlib.import_module(mod)
+    except ImportError:
+        _falta.append(pkg)
+if _falta:
+    print("instalando:", _falta)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", *_falta], check=False)
 # torch ya viene en Colab. gurobipy solo se instala en el notebook del paradigma 1.
 
-from svrplab import bootstrap, protocol, data, runner, metrics, viz
+# --- 4) Arranque y verificación del entorno -------------------------------
+from svrplab import bootstrap, protocol, data, runner, metrics, viz, sensitivity
 env   = bootstrap.init()        # GPU + repo oficial SVRPBench + rutas (Drive si está montado)
 proto = protocol.DEFAULT
-print("device:", env.device, "| raíz de artefactos:", env.paths.root)
+
+print("\n=== Entorno ===")
+print("device      :", env.device)
+print("artefactos  :", env.paths.root)
+if env.device != "cuda":
+    print("AVISO: sin GPU. Los paradigmas 3/4/5 entrenan en CPU y tardarán mucho.\n"
+          "       Entorno de ejecución -> Cambiar tipo de entorno -> GPU.")
+
+# Escritura real en la raíz de artefactos (falla pronto si la ruta no sirve).
+try:
+    env.paths.results.mkdir(parents=True, exist_ok=True)
+    _p = env.paths.results / ".write_test"
+    _p.write_text("ok"); _p.unlink()
+    print("persistencia: OK ->", env.paths.results)
+except Exception as e:
+    raise RuntimeError("No puedo escribir en %s (%s). Revisa Drive o cambia la raíz."
+                       % (env.paths.results, e))
 '''.strip("\n")
 
-CONFIG_CODE = '''
+CONFIG_CODE = r'''
 # === Configuración del experimento (IDÉNTICA en los 5 notebooks) ============
 # Para garantizar el "piso parejo", TODOS los notebooks deben usar los MISMOS
 # SIZES y N_INSTANCES: así resuelven exactamente el mismo banco de instancias.
 # (Las semillas por instancia dependen solo de (base_seed, tamaño, índice), así
 #  que el banco con N_INSTANCES=5 es un PREFIJO exacto del banco con 30.)
-SIZES       = [10, 20, 50, 100, 200, 300]           # clientes. Extiende a [50,100,200,300] (ver notas).
-N_INSTANCES = 5   # 30 (rigor estadístico). Corrida rápida: pon 5.
+SIZES       = [10, 20, 50, 100, 200, 300]   # clientes (escala pequeña y media)
+N_INSTANCES = 5   # 30 para las conclusiones de la tesis. 5 = corrida exploratoria.
 
 # Paralelismo de las fases CPU (Gurobi, ACO/Tabu, evaluador CRN): procesos fork —
 # el GIL impide escalar con hilos. vCPU típicas en Colab: T4≈2, L4≈8, A100≈12.
 import os
 N_JOBS = max(1, os.cpu_count() or 1)
-print(f"N_JOBS = {N_JOBS} procesos paralelos (vCPU detectadas)")
+
+# Presupuesto de tiempo por celda de solver (segundos). Al agotarse, la corrida
+# se detiene LIMPIAMENTE dejando persistido lo hecho; re-ejecuta la celda para
+# continuar donde iba (reanudación por checkpoint). None = sin límite.
+TIME_BUDGET_S = None
+
+# Argumentos de robustez que TODAS las celdas de solver pasan a run_solver:
+#   resume       -> reanuda desde el checkpoint si el banco/protocolo coinciden
+#   on_error     -> una instancia que falla se anota y la corrida continúa
+#   time_budget_s-> corte limpio con lo hecho persistido
+RUN_KW = dict(n_jobs=N_JOBS, resume=True, on_error="record",
+              time_budget_s=TIME_BUDGET_S, checkpoint_every=1)
 
 # Estudio de caso COMÚN: la misma instancia se dibuja paso a paso en TODOS los
 # notebooks (comparación visual justa entre métodos). n=20 garantiza que hasta
 # los exactos con licencia restringida la cubren.
 CASE_SIZE, CASE_IDX = 20, 0
 
+# --- Validación de la configuración (falla pronto y con explicación) -------
+assert isinstance(SIZES, list) and SIZES, "SIZES debe ser una lista no vacía"
+assert all(isinstance(s, int) and s >= 5 for s in SIZES), "SIZES: enteros >= 5"
+assert SIZES == sorted(set(SIZES)), "SIZES debe estar ordenado y sin repetidos"
+assert isinstance(N_INSTANCES, int) and N_INSTANCES >= 1, "N_INSTANCES >= 1"
+assert CASE_SIZE in SIZES, f"CASE_SIZE={CASE_SIZE} debe estar en SIZES"
+assert CASE_IDX < N_INSTANCES, f"CASE_IDX={CASE_IDX} debe ser < N_INSTANCES"
+print(f"N_JOBS = {N_JOBS} procesos paralelos (vCPU detectadas)")
+
+# --- Protocolo efectivo: se imprime para que quede en la salida del notebook -
+print("\n=== Protocolo homologado (fuente única: svrplab.protocol) ===")
+print(f"  evaluación : R={proto.realizations} escenarios, r in [0,{proto.realizations})")
+print(f"  búsqueda   : R={proto.search_realizations} escenarios, "
+      f"r in [{proto.search_offset},{proto.search_offset + proto.search_realizations})")
+print(f"  disjuntas  : {proto.disjoint_search}  <- si es False, el solver selecciona")
+print( "               sobre los MISMOS escenarios con que se le mide (sesgo).")
+print(f"  CVaR alpha={proto.alpha} | penalización recurso={proto.late_penalty}")
+print(f"  escala de accidentes={proto.accident_scale} (1.0 = fiel a SVRPBench)")
+print(f"  costo de flota={proto.vehicle_fixed_cost} | capacidad='{proto.capacity_mode}'")
+assert proto.disjoint_search, (
+    "El protocolo tiene disjoint_search=False: la búsqueda interna vería los "
+    "escenarios de evaluación. Sólo se permite para cuantificar el sesgo en el "
+    "notebook 06, nunca para reportar resultados.")
+
+# --- Banco canónico --------------------------------------------------------
 bank = data.load_bank(env.paths.instances, SIZES, N_INSTANCES,
-                      base_seed=proto.base_seed, capacity_mode=proto.capacity_mode, verbose=True)
+                      base_seed=proto.base_seed, capacity_mode=proto.capacity_mode,
+                      verbose=True)
+faltan = [s for s in SIZES if len(bank.get(s, [])) != N_INSTANCES]
+assert not faltan, f"El banco no tiene {N_INSTANCES} instancias en los tamaños {faltan}"
 print({s: len(v) for s, v in bank.items()}, "instancias por tamaño")
 print("huella del banco (auditoría de piso parejo):", data.bank_fingerprint(bank))
+
+# --- Potencia estadística: advertencia explícita ---------------------------
 if N_INSTANCES < 10:
-    print("ADVERTENCIA: con N_INSTANCES=5 el Wilcoxon pareado NO puede alcanzar p<0.05 "
-          "(mínimo teórico bilateral con n=5: 0.0625). Es una corrida exploratoria; "
-          "para las conclusiones de la tesis usa N_INSTANCES=30.")
+    print("\nADVERTENCIA DE POTENCIA: con N_INSTANCES=%d el Wilcoxon pareado NO puede\n"
+          "alcanzar p<0.05 (mínimo teórico bilateral con n=5: 0.0625). Esta corrida es\n"
+          "EXPLORATORIA: no declares significancia con ella. Para las conclusiones de la\n"
+          "tesis usa N_INSTANCES=30 (el banco de 5 es un prefijo exacto del de 30, así\n"
+          "que nada de lo ya calculado se pierde)." % N_INSTANCES)
+'''.strip("\n")
+
+# Celda de verificación previa: comprueba las invariantes del protocolo ANTES de
+# gastar cómputo. Barata (segundos) y detiene la corrida si algo está roto.
+PREFLIGHT_CODE = r'''
+# === Verificación previa del protocolo (barata; detiene si algo está roto) ==
+import numpy as np
+from svrplab import stochastic as _st
+
+_inst = bank[SIZES[0]][0]
+_n    = len(_inst.demands)
+_seed = int(_inst.metadata["seed"])
+_ok   = True
+
+# (1) CRN: el escenario depende SOLO de (seed, r), nunca de la ruta. Es lo que
+#     hace que dos métodos vean el mismo ruido y la comparación sea pareada.
+_a = _st.sample_scenario(_n, _seed, 3)
+_b = _st.sample_scenario(_n, _seed, 3)
+_c = _st.sample_scenario(_n, _seed, 4)
+_ok &= np.array_equal(_a.z, _b.z) and not np.array_equal(_a.z, _c.z)
+print(f"(1) CRN determinista en (seed, r) y distinto entre r ... {'OK' if _ok else 'FALLO'}")
+
+# (2) Búsqueda y evaluación DISJUNTAS: ningún escenario de búsqueda puede estar
+#     entre los de evaluación, o el solver estaría eligiendo sobre la prueba.
+_ev = {_st.sample_scenario(_n, _seed, r).z.tobytes() for r in range(proto.realizations)}
+_se = [_st.sample_scenario(_n, _seed, proto.search_offset + r).z.tobytes()
+       for r in range(proto.search_realizations)]
+_solape = sum(1 for z in _se if z in _ev)
+_ok &= (_solape == 0)
+print(f"(2) solape búsqueda/evaluación = {_solape} de {len(_se)} (debe ser 0) ... "
+      f"{'OK' if _solape == 0 else 'FALLO'}")
+
+# (3) Equivalencia de backends del evaluador: la versión vectorizada (rápida) y
+#     el bucle de referencia deben dar EXACTAMENTE lo mismo.
+_rutas = [[i] for i in range(1, min(6, _n))]
+_v = _st.score_routes(_inst, _rutas, num_realizations=8, seed=_seed, vectorized=True)
+_l = _st.score_routes(_inst, _rutas, num_realizations=8, seed=_seed, vectorized=False)
+_same = (abs(_v.expected_total - _l.expected_total) < 1e-9 and
+         abs(_v.cvar - _l.cvar) < 1e-9)
+_ok &= _same
+print(f"(3) evaluador vectorizado == bucle de referencia ... {'OK' if _same else 'FALLO'}")
+
+# (4) Independencia de la ruta: el mismo r produce el mismo ξ para rutas distintas.
+_r2 = [list(range(1, min(6, _n)))]
+_x1 = _st.presample_scenarios(_n, _seed, 4)
+_x2 = _st.presample_scenarios(_n, _seed, 4)
+_ok &= all(np.array_equal(a.z, b.z) for a, b in zip(_x1, _x2))
+print(f"(4) ξ independiente de la ruta (CRN puro) ... {'OK' if _ok else 'FALLO'}")
+
+assert _ok, ("VERIFICACIÓN PREVIA FALLIDA: el protocolo no cumple sus invariantes. "
+             "No sigas: cualquier resultado de esta sesión sería inválido.")
+print("\nVerificación previa superada: el piso parejo está garantizado.")
 '''.strip("\n")
 
 # Celda reutilizable de estudio de caso: misma instancia + misma representación
@@ -160,6 +321,8 @@ nb00 = notebook([
        "cachea en `data/instances/`. Los notebooks de paradigma lo cargan tal cual. Reutiliza las "
        "primitivas oficiales de SVRPBench (`city.City`, `time_windows_generator`)."),
     code(CONFIG_CODE),
+    md("### Verificación previa\nAntes de gastar cómputo se comprueban las invariantes que hacen válida la comparación: CRN determinista e independiente de la ruta, escenarios de búsqueda **disjuntos** de los de evaluación, y equivalencia exacta entre el evaluador vectorizado y el bucle de referencia. Si algo falla, la celda **detiene el notebook**: es preferible parar aquí que producir resultados inválidos."),
+    code(PREFLIGHT_CODE),
     md("## 4. Inspección visual de una instancia\nDepósito (rojo) en el centroide; clientes "
        "coloreados por la apertura de su ventana de tiempo. La figura queda exportada en "
        "`figures/00_setup/` (Drive)."),
@@ -222,6 +385,8 @@ nb01 = notebook([
          'subprocess.run([sys.executable, "-m", "pip", "install", "-q", "gurobipy"], check=False)\n'
          'import gurobipy; print("Gurobi", gurobipy.gurobi.version())'),
     code(CONFIG_CODE),
+    md("### Verificación previa\nAntes de gastar cómputo se comprueban las invariantes que hacen válida la comparación: CRN determinista e independiente de la ruta, escenarios de búsqueda **disjuntos** de los de evaluación, y equivalencia exacta entre el evaluador vectorizado y el bucle de referencia. Si algo falla, la celda **detiene el notebook**: es preferible parar aquí que producir resultados inválidos."),
+    code(PREFLIGHT_CODE),
     md("## Licencia de Gurobi y alcance del exacto\nLa licencia restringida de `gurobipy` "
        "(≤2000 vars) cubre: `exact-bc` (no dirigido, ~n²/2 vars) hasta n≈62 y `exact-bc-tw` "
        "(dirigido, ~n² vars) hasta n≈42. Con **licencia académica WLS** (gratuita: "
@@ -252,7 +417,7 @@ nb01 = notebook([
          'import pandas as pd\n'
          'solver = ExactBranchCut(time_limit=120.0, verbose=False)\n'
          'df_bc = runner.run_solver(solver, "exact-bc", bank_exact, env, proto, verbose=True,\n'
-         '                          n_jobs=N_JOBS, cost_samples=True)\n'
+         '                          **RUN_KW, cost_samples=True)\n'
          'df_bc'),
     md("## Resolver `exact-bc-tw` (CVRPTW soft — **busca satisfacer las ventanas**)\n"
        "Formulación dirigida MTZ que penaliza la tardanza nominal `L_j` en el objetivo "
@@ -262,7 +427,7 @@ nb01 = notebook([
     code('solver_tw = ExactBranchCutTW(time_limit=120.0, tw_penalty=proto.late_penalty,\n'
          '                             verbose=False)\n'
          'df_tw = runner.run_solver(solver_tw, "exact-bc-tw", bank_tw, env, proto, verbose=True,\n'
-         '                          n_jobs=N_JOBS, cost_samples=True)\n'
+         '                          **RUN_KW, cost_samples=True)\n'
          'df = pd.concat([df_bc, df_tw], ignore_index=True)\n'
          'df_tw'),
     md("## Métricas agregadas y figuras\nTodas las figuras quedan en `figures/01_exact/`."),
@@ -298,6 +463,8 @@ nb02 = notebook([
            "con el resto. Agregación best-of-K (multistart) determinista por instancia."),
     code(SETUP_CODE),
     code(CONFIG_CODE),
+    md("### Verificación previa\nAntes de gastar cómputo se comprueban las invariantes que hacen válida la comparación: CRN determinista e independiente de la ruta, escenarios de búsqueda **disjuntos** de los de evaluación, y equivalencia exacta entre el evaluador vectorizado y el bucle de referencia. Si algo falla, la celda **detiene el notebook**: es preferible parar aquí que producir resultados inválidos."),
+    code(PREFLIGHT_CODE),
     md("## Resolver ACO y Tabu\n`n_jobs=N_JOBS` reparte las instancias entre procesos fork "
        "(los solvers heredados son Python puro: el GIL impide usar hilos), y las K corridas "
        "best-of-K de cada instancia se puntúan **compartiendo el muestreo ξ** "
@@ -308,9 +475,9 @@ nb02 = notebook([
          'import pandas as pd\n'
          'aco_solver, tabu_solver = ACO(n_seeds=5), Tabu(n_seeds=5)\n'
          'df_aco  = runner.run_solver(aco_solver,  "aco",  bank, env, proto, verbose=True,\n'
-         '                            n_jobs=N_JOBS, cost_samples=True)\n'
+         '                            **RUN_KW, cost_samples=True)\n'
          'df_tabu = runner.run_solver(tabu_solver, "tabu", bank, env, proto, verbose=True,\n'
-         '                            n_jobs=N_JOBS, cost_samples=True)\n'
+         '                            **RUN_KW, cost_samples=True)\n'
          'df = pd.concat([df_aco, df_tabu], ignore_index=True)\n'
          'df'),
     md("## Métricas y figuras\nExportadas a `figures/02_metaheuristic/`."),
@@ -341,6 +508,8 @@ nb03 = notebook([
            "la define el maestro. Inferencia en milisegundos; entrenamiento amortizado en GPU."),
     code(SETUP_CODE),
     code(CONFIG_CODE),
+    md("### Verificación previa\nAntes de gastar cómputo se comprueban las invariantes que hacen válida la comparación: CRN determinista e independiente de la ruta, escenarios de búsqueda **disjuntos** de los de evaluación, y equivalencia exacta entre el evaluador vectorizado y el bucle de referencia. Si algo falla, la celda **detiene el notebook**: es preferible parar aquí que producir resultados inválidos."),
+    code(PREFLIGHT_CODE),
     md("## Entrenar e inferir (GPU)\nLas etiquetas se generan resolviendo instancias de "
        "entrenamiento con el maestro (requiere Gurobi si el maestro es `exact-bc`); esa fase "
        "es CPU y se reparte entre `N_JOBS` procesos. El modelo se cachea en Drive. Ajusta "
@@ -350,13 +519,14 @@ nb03 = notebook([
          'from svrplab.solvers.nco_sl import NCOSupervised, NCOSupervisedFeasible\n'
          'import pandas as pd\n'
          'common = dict(train_sizes=(10,20), n_per_size=256, epochs=80, embed_dim=128,\n'
-         '              device=env.device, models_dir=env.paths.models, n_jobs=N_JOBS, verbose=True)\n'
+         '              device=env.device, models_dir=env.paths.models, n_jobs=N_JOBS,\n'
+         '              verbose=True)\n'
          'sl      = NCOSupervised(teacher="exact-bc", **common)\n'
          'sl_feas = NCOSupervisedFeasible(**common)   # maestro = aco (factible)\n'
          'df_sl   = runner.run_solver(sl,      "nco-sl",      bank, env, proto, verbose=True,\n'
-         '                            n_jobs=N_JOBS, cost_samples=True)\n'
+         '                            **RUN_KW, cost_samples=True)\n'
          'df_feas = runner.run_solver(sl_feas, "nco-sl-feas", bank, env, proto, verbose=True,\n'
-         '                            n_jobs=N_JOBS, cost_samples=True)\n'
+         '                            **RUN_KW, cost_samples=True)\n'
          'df = pd.concat([df_sl, df_feas], ignore_index=True); df'),
     md("## Curva de entrenamiento y figuras\nExportadas a `figures/03_nco_supervised/`. "
        "**Limitación declarada:** el modelo se entrena en n∈{10,20}; evaluar en n≥100 es "
@@ -391,6 +561,8 @@ nb04 = notebook([
            "eso es 'NCO determinista' y, evaluada bajo ξ, exhibe fragilidad ante la estocasticidad."),
     code(SETUP_CODE),
     code(CONFIG_CODE),
+    md("### Verificación previa\nAntes de gastar cómputo se comprueban las invariantes que hacen válida la comparación: CRN determinista e independiente de la ruta, escenarios de búsqueda **disjuntos** de los de evaluación, y equivalencia exacta entre el evaluador vectorizado y el bucle de referencia. Si algo falla, la celda **detiene el notebook**: es preferible parar aquí que producir resultados inválidos."),
+    code(PREFLIGHT_CODE),
     md("## Entrenar (POMO, GPU) e inferir\nEntrenamiento autoregresivo con bonus de entropía y "
        "AMP en GPU. Aumenta `steps_per_size` para mayor calidad (más exigente en cómputo). "
        "La inferencia corre en GPU; la re-puntuación CRN (CPU) se paraleliza con `n_jobs`. "
@@ -404,7 +576,7 @@ nb04 = notebook([
          'rl = NCOReinforce(train_sizes=(10,20), steps_per_size=1500, batch=64, embed_dim=128,\n'
          '                  tw_penalty=proto.late_penalty,   # 0 = baseline puro de costo\n'
          '                  device=env.device, models_dir=env.paths.models, verbose=True)\n'
-         'df = runner.run_solver(rl, "nco-rl", bank, env, proto, verbose=True, n_jobs=N_JOBS,\n'
+         'df = runner.run_solver(rl, "nco-rl", bank, env, proto, verbose=True, **RUN_KW,\n'
          '                       cost_samples=True)\n'
          'df'),
     md("## Curva de entrenamiento y figuras\nExportadas a `figures/04_nco_pomo_am/`."),
@@ -439,6 +611,8 @@ nb05 = notebook([
            "epinet para guiar la exploración con incertidumbre epistémica (Fase 5)."),
     code(SETUP_CODE),
     code(CONFIG_CODE),
+    md("### Verificación previa\nAntes de gastar cómputo se comprueban las invariantes que hacen válida la comparación: CRN determinista e independiente de la ruta, escenarios de búsqueda **disjuntos** de los de evaluación, y equivalencia exacta entre el evaluador vectorizado y el bucle de referencia. Si algo falla, la celda **detiene el notebook**: es preferible parar aquí que producir resultados inválidos."),
+    code(PREFLIGHT_CODE),
     md("## Entrenar EHBG-FACS (GPU)\nEntrena la GFlowNet HBG con recompensa CVaR + refinamiento "
        "GFACS + replay off-policy, sobre un banco de entrenamiento fijo (semillas disjuntas del de "
        "evaluación). Hiperparámetros clave (Cuadro 2 del anteproyecto): `lam_db` (TB↔DB), "
@@ -453,19 +627,60 @@ nb05 = notebook([
          '                infer_ants=16, infer_iters=12, infer_realizations=40,\n'
          '                device=env.device, models_dir=env.paths.models, n_jobs=N_JOBS,\n'
          '                verbose=True)\n'
-         'df = runner.run_solver(facs, "ehbg-facs", bank, env, proto, verbose=True, n_jobs=N_JOBS,\n'
+         'df = runner.run_solver(facs, "ehbg-facs", bank, env, proto, verbose=True, **RUN_KW,\n'
          '                       cost_samples=True)\n'
          'df'),
-    md("## (Opcional, Fase 5) Variante epistémica EHBG-FACS-ENN"),
+    md("## (Fase 5) Variante epistémica EHBG-FACS-ENN — H3\n"
+       "H3 afirma que la incertidumbre epistémica **guía** el muestreo hacia regiones poco "
+       "exploradas. Para que sea contrastable hacen falta tres piezas, y las tres están "
+       "activas aquí: (1) el epinet lleva una **red a priori congelada** (Osband et al.), que "
+       "es la que genera incertidumbre antes de ver datos; (2) la matriz heurística η queda "
+       "**indexada por z**, de modo que la incertidumbre llega a la inferencia y no solo al "
+       "entrenamiento; (3) el ACO muestrea ∝ τ^α·η^β·(1+κ·u), donde u es la dispersión de η "
+       "entre índices — el **bono explícito de exploración**. Con `kappa_epi=0` el bono se "
+       "apaga y queda exactamente EHBG-FACS base, así que la ablación con/sin ENN es limpia."),
     code('from svrplab.solvers.ehbg_facs import EHBGFACSEpistemic\n'
          'facs_enn = EHBGFACSEpistemic(train_sizes=(10,20), n_train=64, epochs=40, embed_dim=128,\n'
          '                             lam_db=0.5, temperature=2.0, batch=16, refine_every=5,\n'
          '                             infer_ants=16, infer_iters=12, infer_realizations=40,\n'
+         '                             kappa_epi=0.5,        # peso del bono epistémico (0 = sin ENN)\n'
+         '                             epi_index_samples=8,  # índices z para estimar la dispersión\n'
+         '                             epi_prior_scale=1.0,  # escala de la red a priori congelada\n'
          '                             device=env.device, models_dir=env.paths.models,\n'
          '                             n_jobs=N_JOBS, verbose=True)\n'
          'df_enn = runner.run_solver(facs_enn, "ehbg-facs-enn", bank, env, proto, verbose=True,\n'
-         '                           n_jobs=N_JOBS, cost_samples=True)\n'
+         '                           **RUN_KW, cost_samples=True)\n'
+         'print("incertidumbre epistémica media usada:",\n'
+         '      df_enn.attrs.get("epi_mean", "ver columna epi_mean del caso"))\n'
          'df_enn'),
+    md("## Ablación de atribución: mismo presupuesto, sin red neuronal\n"
+       "**Es el control que decide si la propuesta aporta algo.** `facs-dist` corre el MISMO "
+       "muestreador de hormigas con el MISMO presupuesto de candidatas, la MISMA regla de "
+       "feromona por CVaR y los MISMOS escenarios de búsqueda, pero sembrado con el prior "
+       "clásico η=1/d en vez de la matriz aprendida. Si `ehbg-facs` no supera a `facs-dist`, "
+       "la ventaja frente a los baselines no viene de la GFlowNet sino del presupuesto de "
+       "búsqueda: sin esta comparación ningún resultado positivo es atribuible. No entrena, "
+       "así que corre en CPU y en segundos."),
+    code('from svrplab.solvers.ehbg_facs import FACSDistancePrior\n'
+         'facs_d = FACSDistancePrior(infer_ants=16, infer_iters=12, infer_realizations=40,\n'
+         '                           device="cpu", n_jobs=N_JOBS, verbose=False)\n'
+         'df_dist = runner.run_solver(facs_d, "facs-dist", bank, env, proto, verbose=True,\n'
+         '                            **RUN_KW, cost_samples=True)\n'
+         'import pandas as pd\n'
+         'cmp = pd.concat([df, df_dist], ignore_index=True)\n'
+         'tabla = cmp.groupby("solver")[["expected_total","cvar","feasibility",\n'
+         '                               "n_vehicles","search_budget"]].mean()\n'
+         'display(tabla)\n'
+         'if {"ehbg-facs","facs-dist"} <= set(tabla.index):\n'
+         '    d = 100*(tabla.loc["facs-dist","expected_total"] -\n'
+         '             tabla.loc["ehbg-facs","expected_total"]) / tabla.loc["facs-dist","expected_total"]\n'
+         '    print(f"\\nVentaja de la red sobre el prior de distancia: {d:+.2f} % en E[c+Q]")\n'
+         '    print("Presupuestos iguales:",\n'
+         '          tabla.loc["ehbg-facs","search_budget"] == tabla.loc["facs-dist","search_budget"])\n'
+         '    if d <= 0:\n'
+         '        print("LECTURA: la red NO aporta sobre el prior de distancia a este presupuesto.\\n"\n'
+         '              "Es un resultado negativo válido y publicable, pero hay que reportarlo\\n"\n'
+         '              "como tal: la contribución sería el marco y el banco, no la ganancia.")'),
     md("## Curvas de entrenamiento (TB / DB / CVaR)\nDiagnósticos **propios de la GFlowNet** "
        "(H1 del anteproyecto): la pérdida TB documenta el balance global de trayectoria, la DB "
        "la consistencia local, y el CVaR medio la señal de recompensa. Exportadas a "
@@ -537,6 +752,8 @@ nb06 = notebook([
            "(corrección de Holm) cuando no, dada la cola pesada de los costos."),
     code(SETUP_CODE),
     code(CONFIG_CODE),
+    md("### Verificación previa\nAntes de gastar cómputo se comprueban las invariantes que hacen válida la comparación: CRN determinista e independiente de la ruta, escenarios de búsqueda **disjuntos** de los de evaluación, y equivalencia exacta entre el evaluador vectorizado y el bucle de referencia. Si algo falla, la celda **detiene el notebook**: es preferible parar aquí que producir resultados inválidos."),
+    code(PREFLIGHT_CODE),
     md("## Cargar todos los resultados\nSe **filtra** al banco de la configuración actual "
        "(`SIZES` × `instance < N_INSTANCES`): así una corrida vieja con otra configuración que "
        "siga en Drive no contamina la comparación. La auditoría de cobertura muestra qué solver "
@@ -550,10 +767,13 @@ nb06 = notebook([
          'cobertura = df.pivot_table(index="solver", columns="size", values="instance",\n'
          '                           aggfunc="count").fillna(0).astype(int)\n'
          'display(cobertura)   # instancias por (solver, tamaño); 0 = no corrió ese tamaño'),
-    md("## Auditoría del piso parejo\nCada corrida persiste en su `run.json` la **huella por "
-       "tamaño** del banco que resolvió (hash de las semillas de sus instancias). Aquí se "
-       "compara contra el banco actual: cualquier discrepancia significa que ese solver corrió "
-       "sobre OTRAS instancias y su comparación no sería válida."),
+    md("## Auditoría del piso parejo\nAntes de comparar nada se verifican cuatro cosas que "
+       "invalidan la comparación si fallan: (1) todos los solvers resolvieron las **mismas "
+       "instancias** en los tamaños que cubren (huella por tamaño); (2) todos usaron el "
+       "**mismo protocolo de evaluación**; (3) todo solver que busca internamente lo hizo "
+       "sobre escenarios **disjuntos** de los de evaluación; (4) ninguna corrida quedó "
+       "incompleta o con fallos. El punto (3) es el que impide que un método gane por haber "
+       "seleccionado sobre la muestra de prueba."),
     code('import pandas as pd\n'
          'ref = data.size_fingerprints(bank)\n'
          'meta = runner.load_run_meta(env)\n'
@@ -562,13 +782,12 @@ nb06 = notebook([
          '    sfp = {int(k): v for k, v in (m.get("size_fingerprints") or {}).items()}\n'
          '    difieren = [s for s, h in sfp.items() if s in ref and ref[s] != h]\n'
          '    filas.append({"solver": sv, "tamaños": sorted(sfp), "device": m.get("device"),\n'
-         '                  "realizations": (m.get("protocol") or {}).get("realizations"),\n'
          '                  "banco_ok": not difieren, "tamaños_discrepantes": difieren})\n'
-         'audit = pd.DataFrame(filas)\n'
-         'display(audit)\n'
-         'assert audit["banco_ok"].all(), "PISO PAREJO ROTO: hay solvers con instancias distintas"\n'
-         'print("Piso parejo verificado: todos los solvers resolvieron las mismas instancias "\n'
-         '      "en los tamaños que cubren.")'),
+         'display(pd.DataFrame(filas))\n'
+         'assert all(f["banco_ok"] for f in filas), "PISO PAREJO ROTO: instancias distintas"\n'
+         '\n'
+         '# Protocolo, disjunción búsqueda/evaluación y estado de cada corrida.\n'
+         'display(sensitivity.audit_runs(meta))'),
     md("## Tabla resumen (leaderboard)\nPromedio sobre todo el banco; ordenado por costo total "
        "esperado con recurso. El glosario (también en `results/metrics_glossary.csv`) define "
        "cada columna, sus unidades, la dirección deseable y si proviene del paper de SVRPBench "
@@ -612,6 +831,49 @@ nb06 = notebook([
          '    fig = viz.plot_cost_distributions(dists, alpha=proto.alpha,\n'
          '        title=f"c+Q bajo los MISMOS xi (CRN) · n={CASE_SIZE} inst {CASE_IDX}")\n'
          '    viz.save_show(fig, env, "cross", f"caso_n{CASE_SIZE}_i{CASE_IDX}_distribuciones")'),
+    md("## ¿Discrimina el CVaR? Barrido del régimen de riesgo\n"
+       "A la tasa oficial de accidentes de SVRPBench (λ ≈ 1.6·10⁻⁴) el CVaR coincide con la "
+       "media dentro del 0.02 %: la recompensa sensible al riesgo estaría optimizando algo "
+       "**numéricamente indistinguible del costo medio**, y ninguna afirmación sobre robustez "
+       "de cola sería contrastable. Esta celda re-puntúa las MISMAS rutas ya calculadas a "
+       "varias escalas de accidentes y localiza el régimen donde el CVaR sí separa. No "
+       "re-resuelve nada, así que es barata. **Reporta los dos regímenes por separado en la "
+       "tesis**: ×1 como fidelidad estricta al benchmark, y la escala de estrés como el único "
+       "régimen donde las hipótesis de riesgo pueden contrastarse."),
+    code('insts = {f"{CASE_SIZE}:{i}": bank[CASE_SIZE][i] for i in range(N_INSTANCES)}\n'
+         'sweeps = []\n'
+         'for sv in sorted(df.solver.unique()):\n'
+         '    rutas_sv = runner.load_routes(env, sv)\n'
+         '    if not any(k in rutas_sv for k in insts):\n'
+         '        continue\n'
+         '    sweeps.append(sensitivity.risk_regime_sweep(\n'
+         '        insts, rutas_sv, proto, scales=(1.0, 10.0, 50.0, 200.0, 500.0),\n'
+         '        solver_name=sv, verbose=False))\n'
+         'sweep = pd.concat(sweeps, ignore_index=True) if sweeps else pd.DataFrame()\n'
+         'if len(sweep):\n'
+         '    tab = sweep.pivot_table(index="accident_scale", columns="solver",\n'
+         '                            values="cvar_gap_pct")\n'
+         '    display(tab.style.format("{:.3f}").set_caption(\n'
+         '        "Brecha CVaR − E[c+Q] (%) por escala de accidentes"))\n'
+         '    sensitivity._print_regime_verdict(sweep)\n'
+         '    sweep.to_csv(env.paths.results / "cross" / "risk_regime_sweep.csv", index=False)'),
+    md("## Cuánto valía la fuga de escenarios (cuantificación del sesgo)\n"
+       "El protocolo ya separa los escenarios de búsqueda de los de evaluación. Esta celda "
+       "mide **cuánto inflaba** el resultado no hacerlo: corre el mismo solver con búsqueda "
+       "disjunta y con búsqueda dentro de la muestra de evaluación, sobre las mismas "
+       "instancias. Sirve para declarar en la tesis la magnitud del defecto corregido en vez "
+       "de solo afirmar que se corrigió. Es la única celda del pipeline autorizada a usar la "
+       "configuración sesgada, y su salida no alimenta ninguna tabla de resultados."),
+    code('from svrplab.solvers.ehbg_facs import FACSDistancePrior\n'
+         'sub = {f"{CASE_SIZE}:{i}": bank[CASE_SIZE][i] for i in range(min(3, N_INSTANCES))}\n'
+         'def _factory(offset):\n'
+         '    return FACSDistancePrior(infer_ants=16, infer_iters=12, infer_realizations=40,\n'
+         '                             device="cpu", n_jobs=N_JOBS, verbose=False,\n'
+         '                             default_realizations=proto.realizations,\n'
+         '                             search_r_offset=offset)\n'
+         'bias = sensitivity.leakage_bias(_factory, sub, proto, solver_name="facs-dist")\n'
+         'display(bias.groupby("busqueda")[["expected_total","cvar","feasibility"]].mean())\n'
+         'bias.to_csv(env.paths.results / "cross" / "leakage_bias.csv", index=False)'),
     md("## Validación estadística\nPara cada métrica clave y cada tamaño: supuestos, prueba "
        "ómnibus (ANOVA/Friedman) y post-hoc Wilcoxon pareado (Holm). Diseño de **bloques por "
        "instancia** (mismo ξ por CRN). **Potencia:** con 5 bloques el p bilateral mínimo de "
@@ -636,10 +898,26 @@ nb06 = notebook([
          'texto = "\\n\\n".join(metrics.summarize_comparison(c) for c in stats.values())\n'
          '(out / "statistics.txt").write_text(texto)\n'
          'print("guardado en", out)'),
-    md("**Lectura final.** Si EHBG-FACS se ubica en la región ideal (bajo `E[c]`/`CVaR` con "
-       "`feasibility` alta) y la diferencia frente a los baselines es **estadísticamente "
-       "significativa** (p_holm < α) en costo/CVaR a factibilidad comparable, se sostiene la "
-       "hipótesis general del anteproyecto."),
+    md("## Lectura final — cuatro condiciones, no una\n"
+       "La hipótesis general se sostiene **solo si se cumplen las cuatro**, y conviene "
+       "escribirlas así en la tesis para que la conclusión no dependa de una sola figura:\n\n"
+       "1. **Ubicación.** EHBG-FACS alcanza bajo `expected_total`/`cvar` con `cvr` baja, en "
+       "la región que ningún baseline ocupa. Ojo: `exact-bc-tw` debe estar en esta "
+       "comparación. Es el único exacto que modela ventanas de tiempo, y excluirlo hace "
+       "parecer vacía una región que no lo está — el `exact-bc` sin ventanas obtiene "
+       "factibilidad 0 porque no representa la restricción, no porque el paradigma sea frágil.\n\n"
+       "2. **Significancia.** La diferencia frente a los baselines es significativa "
+       "(`p_holm` < α) a factibilidad comparable, con al menos 30 bloques por celda.\n\n"
+       "3. **Atribución.** EHBG-FACS supera a `facs-dist`, que corre con el **mismo "
+       "presupuesto de búsqueda** y prior de distancia. Sin esto, la ventaja se explica por "
+       "buscar más, no por la GFlowNet.\n\n"
+       "4. **Validez del protocolo.** La auditoría confirma búsqueda disjunta de la "
+       "evaluación en todos los solvers. Un resultado positivo con búsqueda fugada no es "
+       "defendible.\n\n"
+       "Si (1) y (2) se cumplen pero (3) no, el hallazgo sigue siendo publicable y honesto: "
+       "el aporte es el marco reproducible y el banco homologado, más un resultado negativo "
+       "bien establecido sobre el prior neuronal. Los resultados negativos escasean en este "
+       "campo y una tesis los puede defender."),
 ])
 
 

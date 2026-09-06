@@ -10,7 +10,7 @@ Enrutamiento de Vehículos Estocástico (SVRP)**, usando el benchmark **SVRPBenc
 | 2 | **Metaheurísticas (ACO / Tabu)** | `aco`, `tabu` (oficiales de SVRPBench) | `02_metaheuristicas_aco_tabu.ipynb` |
 | 3 | **NCO supervisado** | `nco-sl`, `nco-sl-feas` (Attention Model) | `03_nco_supervisado_attention.ipynb` |
 | 4 | **NCO por RL (POMO + AM)** | `nco-rl` (Attention Model + POMO) | `04_nco_rl_pomo.ipynb` |
-| 5 | **EHBG-FACS (propuesta)** | `ehbg-facs`, `ehbg-facs-enn` | `05_ehbg_facs.ipynb` |
+| 5 | **EHBG-FACS (propuesta)** | `ehbg-facs`, `ehbg-facs-enn`, `facs-dist` | `05_ehbg_facs.ipynb` |
 
 El notebook `00_setup_y_datos.ipynb` prepara el entorno y el **banco canónico** de
 instancias; `06_comparacion_y_estadistica.ipynb` reúne todos los resultados y aplica
@@ -33,6 +33,15 @@ instancias; `06_comparacion_y_estadistica.ipynb` reúne todos los resultados y a
 4. **Mismas métricas y estadística.** `svrplab.metrics` define el esquema canónico y las
    pruebas (supuestos de Shapiro/Levene → ANOVA; si no se cumplen → Friedman + post-hoc
    Wilcoxon con corrección de Holm), con diseño de **bloques por instancia**.
+5. **Búsqueda y evaluación disjuntas (anti-fuga).** Un solver que puntúe internamente sus
+   candidatas —el enjambre GFACS, la selección best-of-K de las metaheurísticas— lo hace
+   sobre escenarios ξ **disjuntos** de los de evaluación: busca en `r ∈ [R_eval, R_eval+R_s)`
+   y se le mide en `r ∈ [0, R_eval)`. Sin esta separación el solver elige el mínimo sobre la
+   misma muestra con la que se le mide, y la ventaja observada mezcla calidad real con
+   **sesgo de selección**. Lo fija `protocol.search_offset` y lo audita el notebook 06.
+6. **Presupuesto de búsqueda declarado.** Cada solver reporta en `search_budget` cuántas
+   candidatas puntuó antes de elegir. Comparar métodos poblacionales sin igualar ese número
+   no es comparar los métodos, es comparar presupuestos.
 
 ## Uso en Google Colab (Pro / Pro+ recomendado)
 
@@ -101,8 +110,17 @@ papers HBG/GFACS/ENN; las simplificaciones se documentan en `solvers/ehbg_facs.p
   hormigas**; las hormigas muestrean `∝ τ_ACO^α · η^β`, las trayectorias más robustas
   (menor CVaR) actualizan la feromona, y las soluciones exitosas alimentan un **búfer de
   repetición fuera de política** que retroalimenta el entrenamiento de la GFlowNet.
-- **ENN (Fase 5, opcional):** cabeza *epinet* indexada para cuantificar la incertidumbre
-  epistémica y guiar la exploración (`ehbg-facs-enn`).
+- **ENN (Fase 5) — H3 de extremo a extremo:** el epinet lleva una **red a priori congelada**
+  (Osband et al.), que es la que genera incertidumbre antes de ver datos; la matriz heurística
+  `η` queda **indexada por z**, de modo que la incertidumbre llega a la inferencia y no sólo al
+  entrenamiento; y el ACO muestrea `∝ τ^α·η^β·(1+κ·u)`, donde `u` es la dispersión de `η` entre
+  índices: el **bono explícito de exploración** que H3 enuncia. Con `kappa_epi=0` el bono se
+  apaga y queda exactamente EHBG-FACS base, así que la ablación con/sin ENN es limpia.
+- **Ablación de atribución (`facs-dist`):** mismo muestreador, mismo presupuesto de candidatas,
+  misma regla de feromona y los mismos escenarios de búsqueda, pero sembrado con el prior
+  clásico `η = 1/d` en vez de la matriz aprendida. **Es el control que decide si la red aporta
+  algo**: si `ehbg-facs` no supera a `facs-dist`, la ventaja frente a los baselines viene del
+  presupuesto de búsqueda, no de la GFlowNet. No entrena; corre en CPU en segundos.
 
 ## Notas de escalabilidad
 
@@ -157,6 +175,49 @@ papers HBG/GFACS/ENN; las simplificaciones se documentan en `solvers/ehbg_facs.p
   guías de lectura ("qué observar"), no predicciones; las conclusiones se toman en el
   notebook 06 tras la estadística.
 
+## Robustez de las libretas (pensada para Colab)
+
+Colab se desconecta, la GPU se agota y una instancia ocasional revienta. El pipeline está
+construido para que nada de eso cueste horas de cómputo:
+
+- **Reanudación automática.** Cada instancia terminada se anota en un `*_checkpoint.jsonl`.
+  Si la sesión se cae, vuelves a ejecutar la MISMA celda y sigue donde iba. El checkpoint
+  guarda la huella del banco y del protocolo: si cambias `SIZES`, `N_INSTANCES` o el
+  protocolo, **se invalida solo** y recalcula, de modo que nunca se mezclan resultados de
+  configuraciones distintas en un mismo CSV.
+- **Aislamiento de errores.** Una instancia que falla no tumba la corrida: se anota con
+  métricas `NaN` y su mensaje en la columna `error`, y el resto continúa. `load_all_results`
+  descarta esas filas antes de la estadística e informa cuántas descartó, así que un fallo
+  queda **auditado** en vez de desaparecer del conteo.
+- **Presupuesto de tiempo.** `TIME_BUDGET_S` corta limpiamente dejando persistido lo hecho.
+- **Verificación previa.** Antes de gastar cómputo, cada notebook comprueba cuatro
+  invariantes: CRN determinista en `(seed, r)`, ξ independiente de la ruta, solape
+  búsqueda/evaluación **igual a cero**, y equivalencia exacta entre el evaluador vectorizado
+  y el bucle de referencia. Si algo falla, **detiene el notebook**: es preferible parar ahí
+  que producir resultados inválidos.
+- **Validación de la configuración.** `SIZES`, `N_INSTANCES`, `CASE_SIZE`/`CASE_IDX` y la
+  disjunción del protocolo se validan con `assert` y mensaje explicativo, y el protocolo
+  efectivo se imprime en la salida del notebook para que quede registrado en el `.ipynb`.
+- **Comprobación real de persistencia.** Montar Drive no garantiza poder escribir; el setup
+  hace una escritura de prueba y avisa si los resultados quedarían sólo en disco efímero.
+
+## Análisis de sensibilidad (`svrplab.sensitivity`)
+
+Dos preguntas que deciden qué se puede afirmar en la tesis, y ninguna exige re-resolver nada:
+
+- `risk_regime_sweep(...)` re-puntúa las MISMAS rutas a varias `accident_scale` y localiza el
+  régimen donde el CVaR deja de ser la media. A la tasa oficial la brecha CVaR−E[c+Q] es
+  ≈0.01 %: la recompensa sensible al riesgo optimiza algo **numéricamente indistinguible del
+  costo medio** y ninguna afirmación sobre robustez de cola es contrastable ahí. Reporta los
+  dos regímenes por separado: ×1 como fidelidad estricta al benchmark y la escala de estrés
+  como el único régimen donde las hipótesis de riesgo se pueden contrastar.
+- `leakage_bias(...)` corre el mismo solver con búsqueda disjunta y con búsqueda fugada, y
+  mide la inflación. Sirve para declarar **cuánto valía** el defecto corregido, en vez de sólo
+  afirmar que se corrigió. Es la única celda autorizada a usar la configuración sesgada, y su
+  salida no alimenta ninguna tabla de resultados.
+- `audit_runs(...)` verifica antes de comparar que todos los solvers usaron el mismo protocolo,
+  buscaron de forma disjunta y terminaron sin fallos.
+
 ## Verificación local (sin GPU)
 
 ```bash
@@ -164,9 +225,12 @@ papers HBG/GFACS/ENN; las simplificaciones se documentan en `solvers/ehbg_facs.p
 PYTHONPATH=experiments/colab python experiments/colab/scripts/verify_evaluator.py \
     --official experiments/svrp/third_party/svrpbench
 
-# Los 5 paradigmas extremo a extremo (configs minúsculas, CPU):
+# Los 5 paradigmas extremo a extremo (configs minúsculas, CPU). Incluye la
+# ablación `facs-dist`, la aserción de que NINGÚN solver busca sobre los
+# escenarios de evaluación, las pruebas de reanudación y aislamiento de fallos,
+# y el barrido de régimen de riesgo:
 PYTHONPATH=experiments/colab python experiments/colab/scripts/smoke_test.py \
-    --official experiments/svrp/third_party/svrpbench
+    --official experiments/svrp/third_party/svrpbench --skip-gurobi
 ```
 
 ## Relación con `experiments/svrp/`
