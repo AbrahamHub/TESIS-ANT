@@ -43,6 +43,34 @@ instancias; `06_comparacion_y_estadistica.ipynb` reúne todos los resultados y a
    candidatas puntuó antes de elegir. Comparar métodos poblacionales sin igualar ese número
    no es comparar los métodos, es comparar presupuestos.
 
+## Corriendo en Colab con GPU T4 (guía práctica)
+
+Un T4 da **2 vCPU, ~12.7 GB de RAM y 16 GB de VRAM**, y la sesión se corta antes de
+lo que dura el banco completo. Tres consecuencias prácticas:
+
+1. **Corre por etapas, no todo de golpe.** Empieza con `SIZES = [10, 20, 50]`. Cuando
+   termine, añade `100`, luego `200` y `300`. La reanudación está diseñada para esto:
+   **ampliar `SIZES` o subir `N_INSTANCES` no recalcula nada de lo ya hecho** (la
+   validez se comprueba instancia por instancia, contra su semilla). Lo único que
+   invalida el trabajo previo es cambiar el **protocolo**, y ahí debe invalidarlo.
+2. **No subas `N_JOBS` a mano.** El notebook usa `sched_getaffinity`, que ve los
+   núcleos reales del contenedor. `os.cpu_count()` en Colab suele reportar los del
+   anfitrión (8 o más) y lanzar 8 procesos sobre 2 vCPU es más lento que lanzar 2.
+3. **Vigila el pico de memoria a n grande.** Los escenarios ξ ocupan
+   `2·n²·24·8` bytes por realización: 35 MB a n=300, y la búsqueda GFACS
+   pre-muestrea 40 de golpe (≈1.4 GB). La celda de configuración lo calcula y avisa.
+   Si aprieta, baja `search_realizations` en el protocolo.
+
+| n | ξ por realización | pico de búsqueda (R=40) |
+|---|---|---|
+| 50 | 1.0 MB | 0.04 GB |
+| 100 | 3.8 MB | 0.15 GB |
+| 200 | 15.4 MB | 0.61 GB |
+| 300 | 34.6 MB | 1.38 GB |
+
+Si la sesión se corta a mitad, **vuelve a ejecutar la misma celda**: retoma donde iba.
+Con `TIME_BUDGET_S` puedes forzar un corte limpio antes de que Colab te desconecte.
+
 ## Uso en Google Colab (Pro / Pro+ recomendado)
 
 1. **Sube tu repo de tesis** a GitHub (o cópialo a Google Drive en

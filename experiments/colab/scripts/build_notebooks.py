@@ -41,10 +41,10 @@ SETUP_CODE = r'''
 # Deja el entorno listo y VERIFICA que lo está: si algo falta, esta celda falla
 # aquí con un mensaje accionable en vez de reventar 40 minutos después dentro de
 # un solver. Es idempotente: puedes re-ejecutarla sin efectos secundarios.
-REPO_URL  = "https://github.com/AbrahaHub/TESIS-ANT"   # <-- EDITA si tu repo difiere
+REPO_URL  = "https://github.com/AbrahamHub/TESIS-ANT"   # <-- EDITA si tu repo difiere
 USE_DRIVE = True   # persistir banco/resultados/modelos en Google Drive (recomendado)
 
-import os, sys, subprocess, importlib
+import os, sys, subprocess, importlib, importlib.util
 
 IN_COLAB = "google.colab" in sys.modules or os.path.isdir("/content")
 
@@ -91,18 +91,34 @@ def _find_svrplab():
             return c
     return None
 
-import importlib.util
 _path = _find_svrplab()
 if _path is None:
-    print("svrplab no encontrado localmente; clonando", REPO_URL)
     _dest = "/content/TESIS-ANT" if IN_COLAB else os.path.join(os.getcwd(), "TESIS-ANT")
-    subprocess.run(["git", "clone", "--depth", "1", REPO_URL, _dest], check=False)
+    if os.path.isdir(os.path.join(_dest, ".git")):
+        print("actualizando clon existente en", _dest)
+        subprocess.run(["git", "-C", _dest, "pull", "--ff-only"], check=False)
+    else:
+        print("svrplab no encontrado localmente; clonando", REPO_URL)
+        _r = subprocess.run(["git", "clone", "--depth", "1", REPO_URL, _dest],
+                            capture_output=True, text=True)
+        if _r.returncode != 0:
+            # El fallo del clon es la causa habitual; se muestra tal cual en vez
+            # de esconderlo tras un mensaje genérico.
+            raise RuntimeError(
+                "Falló `git clone %s`:\n%s\n"
+                "Causas habituales:\n"
+                "  * REPO_URL mal escrito (revisa el usuario/organización).\n"
+                "  * El repositorio es privado: Colab no tiene tus credenciales.\n"
+                "    Usa un token: REPO_URL = 'https://<TOKEN>@github.com/<user>/<repo>'\n"
+                "  * Alternativa sin git: copia la carpeta experiments/colab del repo\n"
+                "    a MyDrive/TESIS-ANT/experiments/colab y re-ejecuta esta celda."
+                % (REPO_URL, (_r.stderr or _r.stdout or "").strip()[:500]))
     _path = os.path.join(_dest, "experiments", "colab")
-if not os.path.isdir(os.path.join(_path, "svrplab")):
+if not _path or not os.path.isdir(os.path.join(_path, "svrplab")):
     raise RuntimeError(
-        "No encuentro el paquete `svrplab`.\n"
-        "Arreglo: (a) corrige REPO_URL arriba, o (b) copia la carpeta "
-        "experiments/colab del repo a MyDrive/TESIS-ANT/ y re-ejecuta.")
+        "El repositorio se obtuvo pero no contiene `experiments/colab/svrplab`.\n"
+        "Revisa que REPO_URL apunte al repo de la tesis y que la rama tenga el\n"
+        "pipeline subido (git push).")
 if _path not in sys.path:
     sys.path.insert(0, _path)
 print("svrplab en:", _path)
@@ -156,8 +172,15 @@ N_INSTANCES = 5   # 30 para las conclusiones de la tesis. 5 = corrida explorator
 
 # Paralelismo de las fases CPU (Gurobi, ACO/Tabu, evaluador CRN): procesos fork —
 # el GIL impide escalar con hilos. vCPU típicas en Colab: T4≈2, L4≈8, A100≈12.
+# `os.cpu_count()` reporta los núcleos del ANFITRIÓN, no los del contenedor: en un
+# T4 suele decir 8 cuando sólo hay 2 utilizables, y lanzar 8 procesos sobre 2 vCPU
+# es más lento que lanzar 2. `sched_getaffinity` sí ve el límite real del cgroup.
 import os
-N_JOBS = max(1, os.cpu_count() or 1)
+try:
+    N_CPU = len(os.sched_getaffinity(0))          # Linux/Colab: núcleos asignados
+except AttributeError:
+    N_CPU = os.cpu_count() or 1                   # macOS/Windows
+N_JOBS = max(1, N_CPU)
 
 # Presupuesto de tiempo por celda de solver (segundos). Al agotarse, la corrida
 # se detiene LIMPIAMENTE dejando persistido lo hecho; re-ejecuta la celda para
@@ -183,7 +206,32 @@ assert SIZES == sorted(set(SIZES)), "SIZES debe estar ordenado y sin repetidos"
 assert isinstance(N_INSTANCES, int) and N_INSTANCES >= 1, "N_INSTANCES >= 1"
 assert CASE_SIZE in SIZES, f"CASE_SIZE={CASE_SIZE} debe estar en SIZES"
 assert CASE_IDX < N_INSTANCES, f"CASE_IDX={CASE_IDX} debe ser < N_INSTANCES"
-print(f"N_JOBS = {N_JOBS} procesos paralelos (vCPU detectadas)")
+print(f"N_JOBS = {N_JOBS} procesos paralelos (vCPU asignadas al contenedor)")
+if (os.cpu_count() or 1) > N_CPU:
+    print(f"  (os.cpu_count() dice {os.cpu_count()}, pero sólo hay {N_CPU} utilizables)")
+
+# --- Presupuesto de recursos: avisa ANTES de lanzar una corrida imposible ----
+_n_max = max(SIZES)
+_mb_scen = 2 * _n_max**2 * proto.n_buckets * 8 / 1e6      # MB por realización ξ
+_gb_busq = _mb_scen * proto.search_realizations / 1000.0  # pico de la búsqueda GFACS
+try:
+    _gb_ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+except (ValueError, AttributeError, OSError):
+    _gb_ram = float("nan")
+print(f"\n=== Recursos ===")
+print(f"  RAM del sistema      : {_gb_ram:.1f} GB")
+print(f"  escenarios ξ a n={_n_max:<4}: {_mb_scen:.1f} MB por realización")
+print(f"  pico de la búsqueda  : {_gb_busq:.2f} GB (se comparte entre procesos fork)")
+if _gb_ram == _gb_ram and _gb_busq > 0.35 * _gb_ram:
+    print(f"  AVISO: ese pico es una fracción grande de la RAM. Baja "
+          f"`proto.search_realizations` o quita los tamaños mayores de SIZES.")
+if N_CPU <= 2 and _n_max >= 200:
+    print(f"  AVISO DE TIEMPO: con {N_CPU} vCPU y tamaños hasta n={_n_max}, las\n"
+          f"  metaheurísticas y el enjambre GFACS tardan horas por tamaño y una\n"
+          f"  sesión de Colab se corta antes de terminar. Estrategia recomendada:\n"
+          f"  corre por etapas — primero SIZES=[10,20,50], y cuando termine añade\n"
+          f"  100, luego 200 y 300. La reanudación por checkpoint conserva todo lo\n"
+          f"  ya calculado, así que ampliar SIZES no recalcula los tamaños hechos.")
 
 # --- Protocolo efectivo: se imprime para que quede en la salida del notebook -
 print("\n=== Protocolo homologado (fuente única: svrplab.protocol) ===")
@@ -650,8 +698,6 @@ nb05 = notebook([
          '                             n_jobs=N_JOBS, verbose=True)\n'
          'df_enn = runner.run_solver(facs_enn, "ehbg-facs-enn", bank, env, proto, verbose=True,\n'
          '                           **RUN_KW, cost_samples=True)\n'
-         'print("incertidumbre epistémica media usada:",\n'
-         '      df_enn.attrs.get("epi_mean", "ver columna epi_mean del caso"))\n'
          'df_enn'),
     md("## Ablación de atribución: mismo presupuesto, sin red neuronal\n"
        "**Es el control que decide si la propuesta aporta algo.** `facs-dist` corre el MISMO "
@@ -667,7 +713,7 @@ nb05 = notebook([
          'df_dist = runner.run_solver(facs_d, "facs-dist", bank, env, proto, verbose=True,\n'
          '                            **RUN_KW, cost_samples=True)\n'
          'import pandas as pd\n'
-         'cmp = pd.concat([df, df_dist], ignore_index=True)\n'
+         'cmp = pd.concat([df, df_enn, df_dist], ignore_index=True)\n'
          'tabla = cmp.groupby("solver")[["expected_total","cvar","feasibility",\n'
          '                               "n_vehicles","search_budget"]].mean()\n'
          'display(tabla)\n'
@@ -840,7 +886,8 @@ nb06 = notebook([
        "re-resuelve nada, así que es barata. **Reporta los dos regímenes por separado en la "
        "tesis**: ×1 como fidelidad estricta al benchmark, y la escala de estrés como el único "
        "régimen donde las hipótesis de riesgo pueden contrastarse."),
-    code('insts = {f"{CASE_SIZE}:{i}": bank[CASE_SIZE][i] for i in range(N_INSTANCES)}\n'
+    code('CROSS = env.paths.results / "cross"; CROSS.mkdir(parents=True, exist_ok=True)\n'
+         'insts = {f"{CASE_SIZE}:{i}": bank[CASE_SIZE][i] for i in range(N_INSTANCES)}\n'
          'sweeps = []\n'
          'for sv in sorted(df.solver.unique()):\n'
          '    rutas_sv = runner.load_routes(env, sv)\n'
@@ -856,7 +903,7 @@ nb06 = notebook([
          '    display(tab.style.format("{:.3f}").set_caption(\n'
          '        "Brecha CVaR − E[c+Q] (%) por escala de accidentes"))\n'
          '    sensitivity._print_regime_verdict(sweep)\n'
-         '    sweep.to_csv(env.paths.results / "cross" / "risk_regime_sweep.csv", index=False)'),
+         '    sweep.to_csv(CROSS / "risk_regime_sweep.csv", index=False)'),
     md("## Cuánto valía la fuga de escenarios (cuantificación del sesgo)\n"
        "El protocolo ya separa los escenarios de búsqueda de los de evaluación. Esta celda "
        "mide **cuánto inflaba** el resultado no hacerlo: corre el mismo solver con búsqueda "
@@ -873,7 +920,7 @@ nb06 = notebook([
          '                             search_r_offset=offset)\n'
          'bias = sensitivity.leakage_bias(_factory, sub, proto, solver_name="facs-dist")\n'
          'display(bias.groupby("busqueda")[["expected_total","cvar","feasibility"]].mean())\n'
-         'bias.to_csv(env.paths.results / "cross" / "leakage_bias.csv", index=False)'),
+         'bias.to_csv(CROSS / "leakage_bias.csv", index=False)'),
     md("## Validación estadística\nPara cada métrica clave y cada tamaño: supuestos, prueba "
        "ómnibus (ANOVA/Friedman) y post-hoc Wilcoxon pareado (Holm). Diseño de **bloques por "
        "instancia** (mismo ξ por CRN). **Potencia:** con 5 bloques el p bilateral mínimo de "

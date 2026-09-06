@@ -96,30 +96,39 @@ def _rescore_task(args):
 
 
 def _run_signature(bank, proto: Protocol, solver_name: str) -> str:
-    """Huella de (banco + protocolo + solver). Si cambia, el checkpoint previo deja
-    de ser válido y la corrida se reinicia sola: nunca se mezclan resultados de
-    protocolos distintos en el mismo CSV."""
+    """Huella de (solver + protocolo). **No incluye el banco a propósito.**
+
+    La validez de una instancia ya calculada se comprueba una por una, contra la
+    semilla de esa instancia (ver ``_Checkpoint.load``). Meter el banco entero en
+    la huella haría que ampliar ``SIZES`` o subir ``N_INSTANCES`` invalidara todo
+    lo ya calculado, que es justo el flujo de trabajo recomendado en Colab:
+    empezar por los tamaños pequeños y añadir los grandes después. Lo que sí debe
+    invalidar todo es un cambio de protocolo, y eso sigue estando aquí.
+    """
     import hashlib
-    payload = json.dumps({
-        "solver": solver_name,
-        "bank": svrp_data.bank_fingerprint(bank),
-        "sizes": sorted(int(s) for s in bank),
-        "n": {int(s): len(v) for s, v in bank.items()},
-        "protocol": proto.as_dict(),
-    }, sort_keys=True)
+    payload = json.dumps({"solver": solver_name, "protocol": proto.as_dict()},
+                         sort_keys=True)
     return hashlib.sha1(payload.encode()).hexdigest()[:16]
 
 
 class _Checkpoint:
     """Bitácora append-only de instancias terminadas (una línea JSON por instancia)."""
 
-    def __init__(self, path: Path, signature: str):
+    def __init__(self, path: Path, signature: str, seeds: Dict[str, int]):
         self.path = path
         self.signature = signature
+        self.seeds = seeds          # {"size:idx": semilla esperada del banco actual}
         self.rows: Dict[str, dict] = {}
         self.routes: Dict[str, list] = {}
+        self.dropped = 0
 
     def load(self) -> int:
+        """Recupera las instancias validas. Una linea se conserva solo si su
+        protocolo coincide Y la instancia sigue siendo la misma (misma semilla).
+
+        Asi, ampliar ``SIZES`` o subir ``N_INSTANCES`` **conserva** lo ya
+        calculado y solo se resuelve lo nuevo; cambiar el protocolo o regenerar
+        el banco con otra semilla base invalida lo afectado."""
         if not self.path.exists():
             return 0
         kept, stale = 0, False
@@ -134,11 +143,15 @@ class _Checkpoint:
                 stale = True
                 break
             key = rec["key"]
+            expected = self.seeds.get(key)
+            if expected is not None and rec.get("seed") != expected:
+                self.dropped += 1      # esa posicion ahora es OTRA instancia
+                continue
             self.rows[key] = rec["row"]
             self.routes[key] = rec.get("routes", [])
             kept += 1
         if stale:
-            # El banco o el protocolo cambiaron: descartar y empezar limpio.
+            # Cambió el protocolo: nada de lo anterior es comparable.
             self.rows.clear(); self.routes.clear()
             self.path.unlink(missing_ok=True)
             return 0
@@ -150,8 +163,8 @@ class _Checkpoint:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a") as fh:
             fh.write(json.dumps({"signature": self.signature, "key": key,
-                                 "row": row, "routes": routes},
-                                default=_json_safe) + "\n")
+                                 "seed": self.seeds.get(key), "row": row,
+                                 "routes": routes}, default=_json_safe) + "\n")
 
     def done(self) -> set:
         return set(self.rows)
@@ -218,16 +231,19 @@ def run_solver(solver, solver_name: str, bank: dict, env, proto: Protocol, *,
     paradigm, slug = PARADIGM_OF.get(solver_name, (0, "cross"))
     outdir: Path = env.paths.results / slug
     sig = _run_signature(bank, proto, solver_name)
-    ck = _Checkpoint(outdir / f"{solver_name}_checkpoint.jsonl", sig)
-    n_resumed = ck.load() if resume else 0
-
     pairs = [(s, i, inst) for s in sorted(bank) for i, inst in enumerate(bank[s])]
+    seeds = {f"{s}:{i}": int(inst.metadata.get("seed", -1)) for s, i, inst in pairs}
+    ck = _Checkpoint(outdir / f"{solver_name}_checkpoint.jsonl", sig, seeds)
+    n_resumed = ck.load() if resume else 0
     todo = [(s, i, inst) for (s, i, inst) in pairs if f"{s}:{i}" not in ck.done()]
 
     if verbose:
         total = len(pairs)
         print(f"[runner] {solver_name}: {total} instancias | "
               f"reanudadas {n_resumed} | pendientes {len(todo)} | firma {sig}")
+        if ck.dropped:
+            print(f"[runner] {ck.dropped} entradas descartadas: esas posiciones "
+                  f"corresponden ahora a instancias distintas (cambió la semilla)")
         print(f"[runner] protocolo: R_eval={proto.realizations} r∈[0,{proto.realizations}) | "
               f"búsqueda R={proto.search_realizations} r∈[{proto.search_offset},"
               f"{proto.search_offset + proto.search_realizations}) | "
@@ -321,8 +337,9 @@ def run_solver(solver, solver_name: str, bank: dict, env, proto: Protocol, *,
                       f"feas={row['feasibility']:.2f} veh={row['n_vehicles']} "
                       f"t={row['runtime']:.3f}s (wall {wall:.1f}s)")
 
-    rows = [ck.rows[k] for k in sorted(ck.rows, key=_key_order)]
-    routes_map = {k: ck.routes.get(k, []) for k in sorted(ck.rows, key=_key_order)}
+    actuales = [k for k in sorted(ck.rows, key=_key_order) if k in seeds]
+    rows = [ck.rows[k] for k in actuales]
+    routes_map = {k: ck.routes.get(k, []) for k in actuales}
     df = metrics.to_dataframe(rows)
 
     if verbose:
@@ -330,7 +347,7 @@ def run_solver(solver, solver_name: str, bank: dict, env, proto: Protocol, *,
                     time.time() - t_start)
     if save:
         _persist(df, samples, routes_map, bank, env, slug, solver_name, proto,
-                 failures=failures, complete=(len(ck.rows) == len(pairs)
+                 failures=failures, complete=(len(actuales) == len(pairs)
                                               and not stopped_early))
     return df
 
